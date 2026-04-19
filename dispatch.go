@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path"
 	"strings"
+	"syscall"
 	"text/template"
 )
 
@@ -76,6 +77,7 @@ func dispatchNode(ex *Executor, n *Node) {
 	cmd := exec.Command(ex.cfg.GornBin, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 
 	err := cmd.Run()
 
