@@ -56,11 +56,22 @@ mount -t overlay overlay \
 # user ns caused EACCES on overlay whiteouts).
 mount -t tmpfs tmpfs /ix/build
 
+# Remount /proc, /dev, /sys as *rbind* copies. Without this, inside
+# our user ns they're the parent ns's mounts — /proc in particular
+# reports the parent's uid_map, so anything reading /proc/self/status
+# or /proc/self/uid_map sees UIDs we didn't expect. Rbind gives us
+# independent views with our ns's semantics. Matches what jail.sh
+# does explicitly for its rootfs.
+mount --rbind /proc /proc
+mount --rbind /sys /sys
+mount --rbind /dev /dev
+
 # /tmp and /dev/shm: many configure/make/install scripts drop files
 # here (Python's bdist, compileall, meson's introspection, etc.) and
 # silently lose data if the location isn't a plain writable dir. The
 # host's /tmp in our user ns may be restricted; give them fresh tmpfs
-# of their own.
+# of their own. /dev/shm is mounted *after* the /dev rbind so it
+# overrides within our ns without touching host.
 mount -t tmpfs tmpfs /tmp
 mount -t tmpfs tmpfs /dev/shm
 
