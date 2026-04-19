@@ -31,16 +31,18 @@ mkdir -p "$T/ovl"
 mount -t tmpfs tmpfs "$T/ovl"
 mkdir -p "$T/ovl/upper" "$T/ovl/work"
 
-# Pre-create our node's dirs in upper and mark them opaque — tells
-# overlayfs to hide whatever the host's /ix/store has under the same
-# uid, so the cmd's `rm -rf ${out}` doesn't try to whiteout per-file
-# against lower (which fails with EACCES in rootless overlay).
-# Must be done BEFORE mounting overlay, and directly on the upper path:
-# in userxattr mode overlay itself rejects writes to user.overlay.*
-# via the overlay mount.
+# Mark only the OUT dir opaque — it's the one the cmd writes into
+# (and rm -rfs), and hiding lower there avoids EACCES on whiteouts
+# in the rootless overlay. Must be done BEFORE mounting overlay and
+# directly on the upper path: in userxattr mode overlay itself
+# rejects writes to user.overlay.* via the overlay mount.
+#
+# Dep IN_dirs are NOT marked opaque. The cmd only reads them; if the
+# S3 artifact we extract into upper is incomplete, overlayfs falls
+# through to the host's lower copy (same uid, same CAS content).
+# This keeps builds from face-planting on a single corrupted upload.
 {{range $i, $in := .InDirs -}}
 mkdir -p {{shUpper $in}}
-setfattr -n user.overlay.opaque -v y {{shUpper $in}}
 {{end -}}
 mkdir -p {{shUpper .Out}}
 setfattr -n user.overlay.opaque -v y {{shUpper .Out}}
