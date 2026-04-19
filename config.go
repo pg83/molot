@@ -4,8 +4,27 @@ import (
 	"encoding/json"
 	"flag"
 	"os"
+	"regexp"
 	"strings"
 )
+
+var envRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// expandEnv replaces every ${NAME} in s with os.Getenv(NAME). Unset
+// references fail loudly so typos don't silently become empty strings.
+// Pattern is ${NAME} with braces only — bare $NAME is left alone.
+func expandEnv(s string) string {
+	return envRefRe.ReplaceAllStringFunc(s, func(m string) string {
+		name := m[2 : len(m)-1]
+		v, ok := os.LookupEnv(name)
+
+		if !ok {
+			ThrowFmt("config references unset env var ${%s}", name)
+		}
+
+		return v
+	})
+}
 
 type Config struct {
 	GornBin   string `json:"gorn_bin,omitempty"`
@@ -95,10 +114,12 @@ func loadConfig(args []string) *Config {
 
 	c := &Config{}
 
-	// Layer 1: JSON config file.
+	// Layer 1: JSON config file. ${ENV} refs are expanded in the raw
+	// text before JSON parsing (same mechanism as gorn's config).
 	if o.cfgFile != "" {
 		data := Throw2(os.ReadFile(o.cfgFile))
-		Throw(json.Unmarshal(data, c))
+		expanded := expandEnv(string(data))
+		Throw(json.Unmarshal([]byte(expanded), c))
 	}
 
 	// Layer 2: env vars (override file if set).
