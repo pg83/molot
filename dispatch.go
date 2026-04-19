@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
@@ -78,13 +79,21 @@ func dispatchNode(ex *Executor, n *Node) {
 	}
 
 	cmd := exec.Command(ex.cfg.GornBin, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 
 	err := cmd.Run()
 
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "---- molot: stdout of failed node %s ----\n", n.UID)
+		_, _ = os.Stderr.Write(stdout.Bytes())
+		fmt.Fprintf(os.Stderr, "---- molot: stderr of failed node %s ----\n", n.UID)
+		_, _ = os.Stderr.Write(stderr.Bytes())
+		fmt.Fprintf(os.Stderr, "---- end ----\n")
+
 		ThrowFmt("node %s (out=%s) failed via gorn ignite: %v", n.UID, n.OutDirs[0], err)
 	}
 }
