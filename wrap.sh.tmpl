@@ -37,7 +37,7 @@ export PATH=/bin:/ix/realm/system/bin:${PATH:-}
 # symlinks into store (e.g. /bin/base64 -> /ix/store/<busybox>/bin/...)
 # keep working while our declared deps shadow whatever the host had.
 mount -t overlay overlay \
-    -o "lowerdir=/ix/store,upperdir=$T/upper,workdir=$T/work" \
+    -o "lowerdir=/ix/store,upperdir=$T/upper,workdir=$T/work,userxattr" \
     /ix/store
 cd /
 
