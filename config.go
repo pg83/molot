@@ -1,6 +1,9 @@
 package main
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
 type Config struct {
 	GornBin   string
@@ -25,6 +28,10 @@ func loadConfig() *Config {
 
 	if c.GornAPI == "" {
 		ThrowFmt("molot: GORN_API is required")
+	}
+
+	if !strings.HasPrefix(c.GornAPI, "http://") && !strings.HasPrefix(c.GornAPI, "https://") {
+		ThrowFmt("molot: GORN_API must start with http:// or https:// (got %q)", c.GornAPI)
 	}
 
 	if c.S3Bucket == "" {
