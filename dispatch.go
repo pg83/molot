@@ -59,7 +59,7 @@ type wrapCtx struct {
 func dispatchNode(ex *Executor, n *Node) {
 	script := buildWrapScript(ex, n)
 
-	if os.Getenv("MOLOT_DUMP") != "" {
+	if ex.cfg.Dump {
 		fmt.Fprintf(os.Stderr, "---- molot wrap script for %s ----\n%s---- end ----\n", n.UID, script)
 	}
 
@@ -80,7 +80,7 @@ func dispatchNode(ex *Executor, n *Node) {
 		"sh", "-c", payload,
 	}
 
-	quiet := os.Getenv("MOLOT_QUIET") != ""
+	quiet := ex.cfg.Quiet
 
 	delay := time.Second
 	const maxDelay = 60 * time.Second

@@ -5,43 +5,42 @@ import (
 	"os"
 )
 
-const usage = `usage: molot < graph.json
+const header = `usage: molot [flags] < graph.json
 
 Distributed executor for IX build graphs over gorn. Reads a JSON graph on
 stdin (same shape as ix/pkgs/bin/assemble/as.go consumes), dispatches each
-node as a separate gorn task via ` + "`gorn ignite --wait`" + `, with the IX
-node uid as the gorn GUID. Artifacts are stored at
-s3://$S3_BUCKET/gorn/<uid>/result.zstd (tar+zstd of the node's out_dir).
+node as a separate gorn task via "gorn ignite --wait", with the IX node
+uid as the gorn GUID. Artifacts land at
+  s3://$S3_BUCKET/gorn/molot-<tmpl-sha>-<uid>/result.zstd
+(tar+zstd of the node's out_dir).
 
-Required env:
-  GORN_API                URL of gorn control API (e.g. http://gorn:7878)
-  S3_BUCKET               bucket for artifacts
-  S3_ENDPOINT             S3 endpoint URL
-  AWS_ACCESS_KEY_ID       forwarded to worker, used in MC_HOST_molot
-  AWS_SECRET_ACCESS_KEY   forwarded to worker, used in MC_HOST_molot
+Settings precedence: CLI flags > env vars > --config JSON file > defaults.
 
-Optional env:
-  AWS_REGION              default us-east-1
-  MOLOT_GORN              path to gorn binary; default "gorn"
-  MOLOT_DUMP              if set, prints each node's wrap script to stderr
-                          before dispatching (for debugging)
-  MOLOT_QUIET             if set, suppress per-node stdout/stderr from
-                          "gorn ignite" in the live stream; only dump the
-                          buffered logs for nodes that fail
+Flags:
+`
+
+const footer = `
+JSON config fields (any may be overridden by env or CLI):
+  gorn_api, s3_bucket, s3_endpoint, aws_access_key_id,
+  aws_secret_access_key, aws_region, gorn_bin, dump, quiet
 
 Example:
-  cd ix && IX_DUMP_GRAPH=1 ./ix build lib/c | molot
+  cd ix && IX_DUMP_GRAPH=1 IX_FLAGS='stalix=' ./ix build lib/c | molot
+
+Debugging a single node (inputs must already be in S3):
+  ./molot --uid <uid> < graph.json
 `
 
 func main() {
 	for _, a := range os.Args[1:] {
 		if a == "-h" || a == "--help" {
-			fmt.Fprint(os.Stderr, usage)
+			fmt.Fprint(os.Stderr, header)
+			_, fs := parseCLI([]string{})
+			fs.SetOutput(os.Stderr)
+			fs.PrintDefaults()
+			fmt.Fprint(os.Stderr, footer)
 			os.Exit(0)
 		}
-
-		fmt.Fprintf(os.Stderr, "molot: unknown argument %q (try -h)\n", a)
-		os.Exit(2)
 	}
 
 	exc := Try(func() {
@@ -55,8 +54,29 @@ func main() {
 }
 
 func run() {
-	cfg := loadConfig()
+	cfg := loadConfig(os.Args[1:])
 	g := readGraph(os.Stdin)
+	ex := newExecutor(g, cfg)
 
-	newExecutor(g, cfg).visitAll(g.Targets)
+	if cfg.UID != "" {
+		n := findNode(g, cfg.UID)
+		fmt.Fprintf(os.Stderr, "molot: --uid %s: dispatching single node, skipping dep traversal\n", cfg.UID)
+		dispatchNode(ex, n)
+
+		return
+	}
+
+	ex.visitAll(g.Targets)
+}
+
+func findNode(g *Graph, uid string) *Node {
+	for i := range g.Nodes {
+		if g.Nodes[i].UID == uid {
+			return &g.Nodes[i]
+		}
+	}
+
+	ThrowFmt("--uid %s: no node with that uid in the graph", uid)
+
+	return nil
 }
