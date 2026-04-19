@@ -48,7 +48,7 @@ func main() {
 	})
 
 	exc.Catch(func(e *Exception) {
-		fmt.Fprintln(os.Stderr, clr(clrR, "molot: abort: "+e.Error()))
+		fmt.Fprintln(os.Stderr, clr(clrR, "abort: "+e.Error()))
 		os.Exit(1)
 	})
 }
@@ -60,7 +60,7 @@ func run() {
 
 	if cfg.UID != "" {
 		n := findNode(g, cfg.UID)
-		fmt.Fprintln(os.Stderr, clr(clrB, fmt.Sprintf("molot: --uid %s: dispatching single node, skipping dep traversal", cfg.UID)))
+		fmt.Fprintln(os.Stderr, clr(clrB, fmt.Sprintf("--uid %s: dispatching single node, skipping dep traversal", cfg.UID)))
 		dispatchNode(ex, n)
 		ex.cache.Add(gornGUID(n.UID))
 

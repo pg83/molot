@@ -98,7 +98,7 @@ func (ex *Executor) visitAll(outs []string) {
 			})
 
 			exc.Catch(func(e *Exception) {
-				fmt.Fprintln(os.Stderr, clr(clrR, "molot: node failed: "+e.Error()))
+				fmt.Fprintln(os.Stderr, clr(clrR, "node failed: "+e.Error()))
 				os.Exit(2)
 			})
 		}()
@@ -111,9 +111,11 @@ func (ex *Executor) executeNode(n *Node) {
 	ex.total.Add(1)
 
 	guid := gornGUID(n.UID)
+	out := n.OutDirs[0]
 
 	if ex.cache.Has(guid) {
-		fmt.Fprintln(os.Stderr, clr(clrG, fmt.Sprintf("molot: [%d] CACHE %s", ex.done.Add(1), n.UID)))
+		ex.done.Add(1)
+		fmt.Fprintln(os.Stderr, clr(clrG, out))
 
 		return
 	}
@@ -126,11 +128,12 @@ func (ex *Executor) executeNode(n *Node) {
 
 	ex.visitAll(ins)
 
-	fmt.Fprintln(os.Stderr, clr(clrB, fmt.Sprintf("molot: [%d] ENTER %s out=%s", ex.total.Load(), n.UID, n.OutDirs[0])))
+	fmt.Fprintln(os.Stderr, clr(clrB, out))
 
 	dispatchNode(ex, n)
 
 	ex.cache.Add(guid)
+	ex.done.Add(1)
 
-	fmt.Fprintln(os.Stderr, clr(clrG, fmt.Sprintf("molot: [%d] LEAVE %s", ex.done.Add(1), n.UID)))
+	fmt.Fprintln(os.Stderr, clr(clrG, out))
 }

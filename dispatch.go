@@ -61,7 +61,7 @@ func dispatchNode(ex *Executor, n *Node) {
 	script := buildWrapScript(ex, n)
 
 	if ex.cfg.Dump {
-		fmt.Fprintf(os.Stderr, "---- molot wrap script for %s ----\n%s---- end ----\n", n.UID, script)
+		fmt.Fprintf(os.Stderr, "---- wrap script for %s ----\n%s---- end ----\n", n.OutDirs[0], script)
 	}
 
 	// The script can reach hundreds of KB on graphs with many in_dirs;
@@ -123,7 +123,7 @@ func dispatchNode(ex *Executor, n *Node) {
 			// don't rethunder in lock-step.
 			sleep := delay/2 + time.Duration(rand.Int64N(int64(delay)))
 
-			fmt.Fprintln(os.Stderr, clr(clrY, fmt.Sprintf("molot: node %s: spawn error (%v), retrying in %v", n.UID, err, sleep)))
+			fmt.Fprintln(os.Stderr, clr(clrY, fmt.Sprintf("%s: spawn error (%v), retrying in %v", n.OutDirs[0], err, sleep)))
 			time.Sleep(sleep)
 
 			delay *= 2
@@ -136,9 +136,9 @@ func dispatchNode(ex *Executor, n *Node) {
 		}
 
 		if quiet {
-			fmt.Fprintln(os.Stderr, clr(clrR, "---- molot: stdout of failed node "+n.UID+" ----"))
+			fmt.Fprintln(os.Stderr, clr(clrR, "---- stdout of failed node "+n.OutDirs[0]+" ----"))
 			_, _ = os.Stderr.Write(stdout.Bytes())
-			fmt.Fprintln(os.Stderr, clr(clrR, "---- molot: stderr of failed node "+n.UID+" ----"))
+			fmt.Fprintln(os.Stderr, clr(clrR, "---- stderr of failed node "+n.OutDirs[0]+" ----"))
 			_, _ = os.Stderr.Write(stderr.Bytes())
 			fmt.Fprintln(os.Stderr, clr(clrR, "---- end ----"))
 		}

@@ -77,7 +77,7 @@ func parseCLI(args []string) (*cliOpts, *flag.FlagSet) {
 	Throw(fs.Parse(args))
 
 	if fs.NArg() > 0 {
-		ThrowFmt("molot: unexpected positional args: %v", fs.Args())
+		ThrowFmt("unexpected positional args: %v", fs.Args())
 	}
 
 	return o, fs
@@ -199,22 +199,22 @@ func overlayFromEnv(c *Config) {
 
 func validate(c *Config) {
 	if c.GornAPI == "" {
-		ThrowFmt("molot: GORN_API / --api is required")
+		ThrowFmt("GORN_API / --api is required")
 	}
 
 	if !strings.HasPrefix(c.GornAPI, "http://") && !strings.HasPrefix(c.GornAPI, "https://") {
-		ThrowFmt("molot: GORN_API must start with http:// or https:// (got %q)", c.GornAPI)
+		ThrowFmt("GORN_API must start with http:// or https:// (got %q)", c.GornAPI)
 	}
 
 	if c.S3Bucket == "" {
-		ThrowFmt("molot: S3_BUCKET / --bucket is required")
+		ThrowFmt("S3_BUCKET / --bucket is required")
 	}
 
 	if c.S3Endpt == "" {
-		ThrowFmt("molot: S3_ENDPOINT / --endpoint is required")
+		ThrowFmt("S3_ENDPOINT / --endpoint is required")
 	}
 
 	if c.AWSKey == "" || c.AWSSecret == "" {
-		ThrowFmt("molot: AWS_ACCESS_KEY_ID / --aws-key and AWS_SECRET_ACCESS_KEY / --aws-secret are required")
+		ThrowFmt("AWS_ACCESS_KEY_ID / --aws-key and AWS_SECRET_ACCESS_KEY / --aws-secret are required")
 	}
 }
