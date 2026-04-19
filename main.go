@@ -32,6 +32,14 @@ Debugging a single node (inputs must already be in S3):
 `
 
 func main() {
+	// `molot hash` — print the uid-seed that IX's ops_molot.py mixes
+	// into every uid. Any change to wrap.sh.tmpl shifts the hash, so
+	// every uid naturally invalidates when the wrap logic changes.
+	if len(os.Args) == 2 && os.Args[1] == "hash" {
+		fmt.Println(guidPrefix)
+		os.Exit(0)
+	}
+
 	for _, a := range os.Args[1:] {
 		if a == "-h" || a == "--help" {
 			fmt.Fprint(os.Stderr, header)
