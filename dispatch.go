@@ -35,7 +35,7 @@ func gornGUID(uid string) string {
 
 var wrapTmpl = template.Must(template.New("wrap").Funcs(template.FuncMap{
 	"shT":      shT,
-	"shTU":     shTU,
+	"shStore":  shQuote,
 	"archT":    func(i int) string { return shT(fmt.Sprintf("/dep.%d.tar.zst", i)) },
 	"outT":     func() string { return shT("/out.tar.zst") },
 	"depS3":    func(in string) string { return shS3(fmt.Sprintf("/gorn/%s/result.zstd", gornGUID(parseUIDFromStorePath(in)))) },
@@ -130,19 +130,6 @@ func shT(suffix string) string {
 	return `"$T"` + shQuote(suffix)
 }
 
-// shTU rewrites an absolute /ix/store/... path into the overlayfs upper dir
-// under $T/upper. The overlay mount inside inner.sh translates reads/writes
-// back to /ix/store/..., so we populate from outside via $T/upper, and
-// consume the outputs via $T/upper after the namespace exits.
-func shTU(abs string) string {
-	const prefix = "/ix/store"
-
-	if !strings.HasPrefix(abs, prefix) {
-		ThrowFmt("shTU: path %q does not start with %s", abs, prefix)
-	}
-
-	return `"$T"` + shQuote("/upper"+strings.TrimPrefix(abs, prefix))
-}
 
 // shS3 emits `"molot/$S3_BUCKET"'<suffix>'` — a minio-client path using the
 // `molot` alias that the wrap script sets via MC_HOST_molot.

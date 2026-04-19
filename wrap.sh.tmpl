@@ -15,40 +15,41 @@ T=$(mktemp -d "$(pwd)/molot.XXXXXXXX")
 trap 'rm -rf "$T"' EXIT
 export T
 
-# overlayfs layout: our deps + node outputs live in upper/, workdir/ is
-# overlayfs bookkeeping. Keeps the host's /ix/store visible as the
-# lower layer so /ix/realm/system/bin symlinks (into busybox etc.) keep
-# resolving — hiding the host's store with a plain bind breaks /bin.
-mkdir -p "$T/upper" "$T/work"
-
-{{range $i, $in := .InDirs -}}
-mkdir -p {{shTU $in}}
-minio-client cp {{depS3 $in}} {{archT $i}}
-tar --use-compress-program=unzstd -xf {{archT $i}} -C {{shTU $in}}
-rm -f {{archT $i}}
-{{end}}
-mkdir -p {{shTU .Out}}
-
 cat > "$T/inner.sh" <<'MOLOT_INNER_EOF'
 #!/bin/sh
 set -eu
 export PATH=/bin:/ix/realm/system/bin:${PATH:-}
-# Overlay our deps on top of the host's /ix/store so the realm's
-# symlinks into store (e.g. /bin/base64 -> /ix/store/<busybox>/bin/...)
-# keep working while our declared deps shadow whatever the host had.
+
+# Fresh tmpfs as overlayfs upper/work, mounted inside the user+mount ns.
+# A tmpfs created in this ns reliably supports user.overlay.* xattrs
+# (needed for whiteouts with userxattr mode); the host's /var/run tmpfs
+# may not. Overlay lowerdir stays at host's /ix/store so realm symlinks
+# (/bin -> /ix/realm/system/bin -> /ix/store/<busybox>/...) keep resolving.
+mkdir -p "$T/ovl"
+mount -t tmpfs tmpfs "$T/ovl"
+mkdir -p "$T/ovl/upper" "$T/ovl/work"
 mount -t overlay overlay \
-    -o "lowerdir=/ix/store,upperdir=$T/upper,workdir=$T/work,userxattr" \
+    -o "lowerdir=/ix/store,upperdir=$T/ovl/upper,workdir=$T/ovl/work,userxattr" \
     /ix/store
+
+{{range $i, $in := .InDirs -}}
+mkdir -p {{shStore $in}}
+minio-client cp {{depS3 $in}} {{archT $i}}
+tar --use-compress-program=unzstd -xf {{archT $i}} -C {{shStore $in}}
+rm -f {{archT $i}}
+{{end}}
+mkdir -p {{shStore .Out}}
+
 cd /
 
 {{range $i, $c := .Cmds -}}
 # cmd {{$i}}
 printf %s {{stdinB64 $c}} | base64 -d | {{cmdLine $c}}
 {{end}}
+
+tar --use-compress-program=zstd -cf {{outT}} -C {{shStore .Out}} .
+minio-client cp {{outT}} {{selfS3 .UID}}
 MOLOT_INNER_EOF
 chmod +x "$T/inner.sh"
 
 unshare -r -U -m "$T/inner.sh"
-
-tar --use-compress-program=zstd -cf {{outT}} -C {{shTU .Out}} .
-minio-client cp {{outT}} {{selfS3 .UID}}
