@@ -54,10 +54,14 @@ MOLOT_DUMP             (any)                         # dump the generated wrap s
 
 The AWS/S3 env vars are forwarded to each task via `gorn ignite --env`, so the wrap script on the worker receives them.
 
+## Graph-generation contract
+
+The incoming graph **must** be produced with `IX_FLAGS='stalix='` (set in the environment of `./ix build ...`). That drops the `confine`/`tmpfs` wrapping around build cmds. Without it, nested unshare (molot's outer user ns + confine's inner user ns) triggers EACCES on overlayfs whiteouts and builds fail. See `die/sh0.sh:script_confine` for the branch we're suppressing. molot replaces the lost `tmpfs` step by mounting tmpfs on `/ix/build` itself inside the ns.
+
 ## Worker assumptions
 
 - Full stalix toolchain available (`sh`, `tar`, `zstd`, `unzstd`, `minio-client`, `unshare`, `mount`, `mkdir`, `rm`, `printf`, `base64`, `env`, `mktemp`, `chmod`, `cat`).
-- Kernel allows unprivileged user namespaces.
+- Kernel allows unprivileged user namespaces and overlayfs with `userxattr` (Linux 5.11+).
 - `/ix` exists as a directory (so we can `mount --bind $T/ix /ix`). Its original contents are hidden inside our mount ns; the host's real `/ix` is not modified.
 - S3 auth: the script builds `MC_HOST_molot="<scheme>://<key>:<secret>@<host>"` from the AWS_* env vars forwarded by the executor; no `~/.mc/config.json` on disk. Access keys must not contain `@` or `:` — if they do, switch to `minio-client alias set` (writes to `$HOME/.mc/`).
 

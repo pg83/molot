@@ -16,7 +16,7 @@ export AWS_ACCESS_KEY_ID=...
 export AWS_SECRET_ACCESS_KEY=...
 
 # Produce a graph from IX, pipe into molot:
-cd path/to/ix && IX_DUMP_GRAPH=1 ./ix build lib/c | molot
+cd path/to/ix && IX_DUMP_GRAPH=1 IX_FLAGS='stalix=' ./ix build lib/c | molot
 ```
 
 Debug the generated wrap scripts without touching gorn:
@@ -64,7 +64,11 @@ Same JSON as `ix/pkgs/bin/assemble/as.go` consumes:
 
 ## Worker requirements
 
-Designed for stalix endpoints. Expected on `PATH`: `sh`, `tar`, `zstd`, `unzstd`, `minio-client`, `unshare`, `mount`, `mkdir`, `rm`, `mktemp`, `env`, `base64`, `printf`, `chmod`. Kernel must permit unprivileged user namespaces. `/ix` must exist as a directory (we `mount --bind` a staging tree over it inside our private mount ns; the host's real `/ix` is unaffected). S3 auth is done via `MC_HOST_molot` (constructed from env vars inside the script) — no `~/.mc/config.json` state.
+Designed for stalix endpoints. Expected on `PATH`: `sh`, `tar`, `zstd`, `unzstd`, `minio-client`, `unshare`, `mount`, `mkdir`, `rm`, `mktemp`, `env`, `base64`, `printf`, `chmod`. Kernel must permit unprivileged user namespaces and overlayfs with `userxattr` (Linux 5.11+).
+
+The graph **must** be generated with `IX_FLAGS='stalix='` so IX omits the `confine`/`tmpfs` wrapping around build cmds. Nested user namespaces (molot's outer ns + confine's inner ns) hit EACCES when overlayfs whiteouts are created from the inner ns; stripping the wrap at graph-gen time sidesteps that. molot itself mounts tmpfs on `/ix/build` inside its ns so `${tmp}` paths still resolve.
+
+S3 auth is done via `MC_HOST_molot` (constructed from env vars inside the script) — no `~/.mc/config.json` state.
 
 ## See also
 

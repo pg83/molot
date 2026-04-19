@@ -32,6 +32,13 @@ mount -t overlay overlay \
     -o "lowerdir=/ix/store,upperdir=$T/ovl/upper,workdir=$T/ovl/work,userxattr" \
     /ix/store
 
+# IX build scripts expect ${tmp}=/ix/build/<uid> to be writable scratch.
+# Stock IX wraps builds with bin/ix/tmpfs which does exactly this; we do
+# it here since molot expects the graph to be generated with
+# IX_FLAGS=stalix= (no confine/tmpfs wrap — nested unshare inside our
+# user ns caused EACCES on overlay whiteouts).
+mount -t tmpfs tmpfs /ix/build
+
 {{range $i, $in := .InDirs -}}
 mkdir -p {{shStore $in}}
 minio-client cp {{depS3 $in}} {{archT $i}}
