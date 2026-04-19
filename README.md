@@ -38,6 +38,7 @@ MOLOT_GORN=/bin/true MOLOT_DUMP=1 ./molot < graph.json
 | `MOLOT_GORN` | no | path to `gorn` binary; default `gorn` |
 | `MOLOT_DUMP` | no | if set, prints each node's wrap script to stderr before dispatching |
 | `MOLOT_QUIET` | no | if set, don't stream per-node `gorn ignite` stdout/stderr; only dump them if a node fails |
+| `MOLOT_CACHE` | no | path to a success-cache file (one GUID per line). Nodes whose GUID is in the file are skipped entirely — no gorn call, no dep traversal. Written on every successful dispatch. Same path via `--cache`. |
 
 ## Graph format
 

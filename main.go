@@ -62,6 +62,7 @@ func run() {
 		n := findNode(g, cfg.UID)
 		fmt.Fprintln(os.Stderr, clr(clrB, fmt.Sprintf("molot: --uid %s: dispatching single node, skipping dep traversal", cfg.UID)))
 		dispatchNode(ex, n)
+		ex.cache.Add(gornGUID(n.UID))
 
 		return
 	}

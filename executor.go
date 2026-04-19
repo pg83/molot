@@ -17,12 +17,13 @@ func (fu *future) callOnce() {
 }
 
 type Executor struct {
-	g        *Graph
-	cfg      *Config
-	byOut    map[string]*Node
-	futures  map[string]*future
-	done     atomic.Uint64
-	total    atomic.Uint64
+	g       *Graph
+	cfg     *Config
+	cache   *Cache
+	byOut   map[string]*Node
+	futures map[string]*future
+	done    atomic.Uint64
+	total   atomic.Uint64
 }
 
 func (ex *Executor) threads() int {
@@ -39,6 +40,7 @@ func newExecutor(g *Graph, cfg *Config) *Executor {
 	ex := &Executor{
 		g:       g,
 		cfg:     cfg,
+		cache:   openCache(cfg.CacheFile),
 		byOut:   map[string]*Node{},
 		futures: map[string]*future{},
 	}
@@ -108,6 +110,14 @@ func (ex *Executor) visitAll(outs []string) {
 func (ex *Executor) executeNode(n *Node) {
 	ex.total.Add(1)
 
+	guid := gornGUID(n.UID)
+
+	if ex.cache.Has(guid) {
+		fmt.Fprintln(os.Stderr, clr(clrG, fmt.Sprintf("molot: [%d] CACHE %s", ex.done.Add(1), n.UID)))
+
+		return
+	}
+
 	ins := make([]string, 0, len(n.InDirs))
 
 	for _, in := range n.InDirs {
@@ -119,6 +129,8 @@ func (ex *Executor) executeNode(n *Node) {
 	fmt.Fprintln(os.Stderr, clr(clrB, fmt.Sprintf("molot: [%d] ENTER %s out=%s", ex.total.Load(), n.UID, n.OutDirs[0])))
 
 	dispatchNode(ex, n)
+
+	ex.cache.Add(guid)
 
 	fmt.Fprintln(os.Stderr, clr(clrG, fmt.Sprintf("molot: [%d] LEAVE %s", ex.done.Add(1), n.UID)))
 }

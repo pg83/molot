@@ -34,6 +34,7 @@ type Config struct {
 	AWSKey    string `json:"aws_access_key_id,omitempty"`
 	AWSSecret string `json:"aws_secret_access_key,omitempty"`
 	AWSRegion string `json:"aws_region,omitempty"`
+	CacheFile string `json:"cache_file,omitempty"`
 	Dump      bool   `json:"dump,omitempty"`
 	Quiet     bool   `json:"quiet,omitempty"`
 	UID       string `json:"-"` // not meaningful in a config file; runtime-only
@@ -48,6 +49,7 @@ type cliOpts struct {
 	awsKey    string
 	awsSecret string
 	awsRegion string
+	cacheFile string
 	dump      bool
 	quiet     bool
 	uid       string
@@ -67,6 +69,7 @@ func parseCLI(args []string) (*cliOpts, *flag.FlagSet) {
 	fs.StringVar(&o.awsSecret, "aws-secret", "", "S3 secret key (env AWS_SECRET_ACCESS_KEY)")
 	fs.StringVar(&o.awsRegion, "aws-region", "", "S3 region (env AWS_REGION; default us-east-1)")
 	fs.StringVar(&o.gornBin, "gorn", "", "path to gorn binary (env MOLOT_GORN; default \"gorn\")")
+	fs.StringVar(&o.cacheFile, "cache", "", "local success-cache file: one gorn GUID per line; nodes whose GUID is present are skipped (env MOLOT_CACHE)")
 	fs.BoolVar(&o.dump, "dump", false, "dump each generated wrap script to stderr (env MOLOT_DUMP)")
 	fs.BoolVar(&o.quiet, "quiet", false, "suppress per-task stream, print only on failure (env MOLOT_QUIET)")
 	fs.StringVar(&o.uid, "uid", "", "run only the node with this uid, skipping dep traversal (for debugging)")
@@ -133,6 +136,7 @@ func loadConfig(args []string) *Config {
 	c.AWSSecret = setFromFlagStr(fs, "aws-secret", c.AWSSecret, o.awsSecret)
 	c.AWSRegion = setFromFlagStr(fs, "aws-region", c.AWSRegion, o.awsRegion)
 	c.GornBin = setFromFlagStr(fs, "gorn", c.GornBin, o.gornBin)
+	c.CacheFile = setFromFlagStr(fs, "cache", c.CacheFile, o.cacheFile)
 	c.Dump = setFromFlagBool(fs, "dump", c.Dump, o.dump)
 	c.Quiet = setFromFlagBool(fs, "quiet", c.Quiet, o.quiet)
 	c.UID = o.uid // CLI-only
@@ -178,6 +182,10 @@ func overlayFromEnv(c *Config) {
 
 	if v := os.Getenv("MOLOT_GORN"); v != "" {
 		c.GornBin = v
+	}
+
+	if v := os.Getenv("MOLOT_CACHE"); v != "" {
+		c.CacheFile = v
 	}
 
 	if os.Getenv("MOLOT_DUMP") != "" {
