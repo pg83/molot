@@ -70,6 +70,7 @@ func dispatchNode(ex *Executor, n *Node) {
 		"ignite",
 		"--wait",
 		"--guid", gornGUID(n.UID),
+		"--descr", n.OutDirs[0],
 		"--api", ex.cfg.GornAPI,
 		"--env", "AWS_ACCESS_KEY_ID=" + ex.cfg.AWSKey,
 		"--env", "AWS_SECRET_ACCESS_KEY=" + ex.cfg.AWSSecret,
