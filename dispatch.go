@@ -46,14 +46,15 @@ var wrapTmpl = template.Must(template.New("wrap").Funcs(template.FuncMap{
 }).Parse(wrapTmplSrc))
 
 type wrapCtx struct {
-	UID    string
-	InDirs []string
-	Out    string
-	Cmds   []Cmd
+	UID     string
+	InDirs  []string
+	Out     string
+	Cmds    []Cmd
+	Threads int
 }
 
 func dispatchNode(ex *Executor, n *Node) {
-	script := buildWrapScript(n)
+	script := buildWrapScript(ex, n)
 
 	if os.Getenv("MOLOT_DUMP") != "" {
 		fmt.Fprintf(os.Stderr, "---- molot wrap script for %s ----\n%s---- end ----\n", n.UID, script)
@@ -88,12 +89,13 @@ func dispatchNode(ex *Executor, n *Node) {
 	}
 }
 
-func buildWrapScript(n *Node) string {
+func buildWrapScript(ex *Executor, n *Node) string {
 	ctx := wrapCtx{
-		UID:    n.UID,
-		InDirs: n.InDirs,
-		Out:    n.OutDirs[0],
-		Cmds:   n.Cmds,
+		UID:     n.UID,
+		InDirs:  n.InDirs,
+		Out:     n.OutDirs[0],
+		Cmds:    n.Cmds,
+		Threads: ex.threads(),
 	}
 
 	var buf strings.Builder
@@ -107,7 +109,15 @@ func cmdLine(c Cmd) string {
 		ThrowFmt("cmd with empty args")
 	}
 
-	parts := []string{"env", "-i"}
+	// IX_RANDOM / make_thrs: stock assemble.go injects these on every cmd
+	// (see as.go:env). IX_RANDOM is used by fast_rm for trash-dir suffixes;
+	// make_thrs picks parallelism for make. Computed at cmd invocation so
+	// IX_RANDOM differs per cmd like as.go does.
+	parts := []string{
+		"env", "-i",
+		`"IX_RANDOM=$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')"`,
+		`"make_thrs=$MOLOT_MAKE_THRS"`,
+	}
 
 	for k, v := range c.Env {
 		parts = append(parts, shQuote(k+"="+v))
