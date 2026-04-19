@@ -115,7 +115,7 @@ func (ex *Executor) executeNode(n *Node) {
 
 	if ex.cache.Has(guid) {
 		ex.done.Add(1)
-		fmt.Fprintln(os.Stderr, clr(clrG, "CACHE "+out))
+		fmt.Fprintln(os.Stderr, clr(clrG, ex.progress()+" CACHE "+out))
 
 		return
 	}
@@ -128,12 +128,18 @@ func (ex *Executor) executeNode(n *Node) {
 
 	ex.visitAll(ins)
 
-	fmt.Fprintln(os.Stderr, clr(clrB, "ENTER "+out))
+	fmt.Fprintln(os.Stderr, clr(clrB, ex.progress()+" ENTER "+out))
 
 	dispatchNode(ex, n)
 
 	ex.cache.Add(guid)
 	ex.done.Add(1)
 
-	fmt.Fprintln(os.Stderr, clr(clrG, "LEAVE "+out))
+	fmt.Fprintln(os.Stderr, clr(clrG, ex.progress()+" LEAVE "+out))
+}
+
+// progress returns "{done+1/visited}" — the count of visited nodes so
+// far as a rough parallel to assemble.go's complete().
+func (ex *Executor) progress() string {
+	return fmt.Sprintf("{%d/%d}", ex.done.Load()+1, ex.total.Load())
 }
