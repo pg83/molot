@@ -1,8 +1,10 @@
 package main
 
 import (
+	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,12 +16,28 @@ import (
 //go:embed wrap.sh.tmpl
 var wrapTmplSrc string
 
+// guidPrefix scopes molot's gorn GUIDs into their own namespace AND binds them
+// to the wrap-script template hash. Any change to wrap.sh.tmpl shifts the
+// prefix, which in turn invalidates every cached gorn result (idempotency
+// key = GUID = prefix+uid). This is the CAS contract: node uid alone is
+// insufficient — the executor's side of the contract (download/mount/run/
+// upload mechanics) is equally part of what determines correctness.
+var guidPrefix = func() string {
+	h := sha256.Sum256([]byte(wrapTmplSrc))
+
+	return "molot-" + hex.EncodeToString(h[:])[:12] + "-"
+}()
+
+func gornGUID(uid string) string {
+	return guidPrefix + uid
+}
+
 var wrapTmpl = template.Must(template.New("wrap").Funcs(template.FuncMap{
 	"shT":      shT,
 	"archT":    func(i int) string { return shT(fmt.Sprintf("/dep.%d.tar.zst", i)) },
 	"outT":     func() string { return shT("/out.tar.zst") },
-	"depS3":    func(in string) string { return shS3(fmt.Sprintf("/gorn/%s/result.zstd", parseUIDFromStorePath(in))) },
-	"selfS3":   func(uid string) string { return shS3(fmt.Sprintf("/gorn/%s/result.zstd", uid)) },
+	"depS3":    func(in string) string { return shS3(fmt.Sprintf("/gorn/%s/result.zstd", gornGUID(parseUIDFromStorePath(in)))) },
+	"selfS3":   func(uid string) string { return shS3(fmt.Sprintf("/gorn/%s/result.zstd", gornGUID(uid))) },
 	"stdinB64": func(c Cmd) string { return shQuote(base64.StdEncoding.EncodeToString([]byte(c.Stdin))) },
 	"cmdLine":  cmdLine,
 }).Parse(wrapTmplSrc))
@@ -44,7 +62,7 @@ func dispatchNode(ex *Executor, n *Node) {
 	args := []string{
 		"ignite",
 		"--wait",
-		"--guid", n.UID,
+		"--guid", gornGUID(n.UID),
 		"--api", ex.cfg.GornAPI,
 		"--env", "AWS_ACCESS_KEY_ID=" + ex.cfg.AWSKey,
 		"--env", "AWS_SECRET_ACCESS_KEY=" + ex.cfg.AWSSecret,
