@@ -15,16 +15,17 @@ stdin: IX graph JSON
         │
         ▼ (gorn queue → SSH → gorn wrap on worker)
    wrap shell on worker:
+      export MC_HOST_molot="<scheme>://<key>:<secret>@<host>"   # from S3_ENDPOINT + AWS_*
       mktemp $T; trap rm
       for each in_dir:
-        aws s3 cp s3://<bucket>/gorn/<dep-uid>/result.zstd $T/dep.N.tar.zst
+        minio-client cp molot/<bucket>/gorn/<dep-uid>/result.zstd $T/dep.N.tar.zst
         tar --use-compress-program=unzstd -xf $T/dep.N.tar.zst -C $T<in_dir>
       mkdir -p $T<out_dir>
       unshare -r -U -m inner.sh:
         mount --bind $T/ix /ix
         per cmd: printf <stdin-b64> | base64 -d | env -i K=V… argv…
       tar --use-compress-program=zstd -cf $T/out.tar.zst -C $T<out_dir> .
-      aws s3 cp $T/out.tar.zst s3://<bucket>/gorn/<uid>/result.zstd
+      minio-client cp $T/out.tar.zst molot/<bucket>/gorn/<uid>/result.zstd
 ```
 
 Idempotency: node uid **is** the gorn task GUID. `gorn wrap` already does `HEAD gorn/<uid>/result.json` — a re-submission of an already-built node returns `already-done` instantly, no rebuild, no re-upload.
@@ -55,10 +56,10 @@ The AWS/S3 env vars are forwarded to each task via `gorn ignite --env`, so the w
 
 ## Worker assumptions
 
-- Full stalix toolchain available (`sh`, `tar`, `zstd`, `unzstd`, `aws`, `unshare`, `mount`, `mkdir`, `rm`, `printf`, `base64`, `env`, `mktemp`, `chmod`, `cat`).
+- Full stalix toolchain available (`sh`, `tar`, `zstd`, `unzstd`, `minio-client`, `unshare`, `mount`, `mkdir`, `rm`, `printf`, `base64`, `env`, `mktemp`, `chmod`, `cat`).
 - Kernel allows unprivileged user namespaces.
 - `/ix` exists as a directory (so we can `mount --bind $T/ix /ix`). Its original contents are hidden inside our mount ns; the host's real `/ix` is not modified.
-- `aws` CLI configured to authenticate via env vars (no `~/.aws/credentials` required).
+- S3 auth: the script builds `MC_HOST_molot="<scheme>://<key>:<secret>@<host>"` from the AWS_* env vars forwarded by the executor; no `~/.mc/config.json` on disk. Access keys must not contain `@` or `:` — if they do, switch to `minio-client alias set` (writes to `$HOME/.mc/`).
 
 Fetch nodes (`pool: network`) run on the worker — worker needs outbound internet for tarballs.
 

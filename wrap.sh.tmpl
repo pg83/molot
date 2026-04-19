@@ -6,13 +6,17 @@ set -eu
 : "${S3_ENDPOINT:?}"
 : "${S3_BUCKET:?}"
 
+S3_SCHEME="${S3_ENDPOINT%%://*}"
+S3_HOST="${S3_ENDPOINT#*://}"
+export MC_HOST_molot="${S3_SCHEME}://${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}@${S3_HOST}"
+
 T=$(mktemp -d -t molot.XXXXXXXX)
 trap 'rm -rf "$T"' EXIT
 export T
 
 {{range $i, $in := .InDirs -}}
 mkdir -p {{shT $in}}
-aws s3 cp --endpoint-url "$S3_ENDPOINT" {{depS3 $in}} {{archT $i}}
+minio-client cp {{depS3 $in}} {{archT $i}}
 tar --use-compress-program=unzstd -xf {{archT $i}} -C {{shT $in}}
 rm -f {{archT $i}}
 {{end}}
@@ -34,4 +38,4 @@ chmod +x "$T/inner.sh"
 unshare -r -U -m "$T/inner.sh"
 
 tar --use-compress-program=zstd -cf {{outT}} -C {{shT .Out}} .
-aws s3 cp --endpoint-url "$S3_ENDPOINT" {{outT}} {{selfS3 .UID}}
+minio-client cp {{outT}} {{selfS3 .UID}}

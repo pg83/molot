@@ -31,7 +31,7 @@ MOLOT_GORN=/bin/true MOLOT_DUMP=1 ./molot < graph.json
 |---|---|---|
 | `GORN_API` | yes | URL of `gorn control` (`--api` for each `gorn ignite`) |
 | `S3_BUCKET` | yes | S3 bucket for both gorn (`gorn/<uid>/result.json` etc.) and molot artifacts (`gorn/<uid>/result.zstd`) |
-| `S3_ENDPOINT` | yes | S3 endpoint URL, forwarded to worker for `aws s3 cp --endpoint-url` |
+| `S3_ENDPOINT` | yes | S3 endpoint URL, forwarded to worker; used to build `MC_HOST_molot` for `minio-client` |
 | `AWS_ACCESS_KEY_ID` | yes | forwarded to worker |
 | `AWS_SECRET_ACCESS_KEY` | yes | forwarded to worker |
 | `AWS_REGION` | no | default `us-east-1` |
@@ -64,7 +64,7 @@ Same JSON as `ix/pkgs/bin/assemble/as.go` consumes:
 
 ## Worker requirements
 
-Designed for stalix endpoints. Expected on `PATH`: `sh`, `tar`, `zstd`, `unzstd`, `aws`, `unshare`, `mount`, `mkdir`, `rm`, `mktemp`, `env`, `base64`, `printf`, `chmod`. Kernel must permit unprivileged user namespaces. `/ix` must exist as a directory (we `mount --bind` a staging tree over it inside our private mount ns; the host's real `/ix` is unaffected).
+Designed for stalix endpoints. Expected on `PATH`: `sh`, `tar`, `zstd`, `unzstd`, `minio-client`, `unshare`, `mount`, `mkdir`, `rm`, `mktemp`, `env`, `base64`, `printf`, `chmod`. Kernel must permit unprivileged user namespaces. `/ix` must exist as a directory (we `mount --bind` a staging tree over it inside our private mount ns; the host's real `/ix` is unaffected). S3 auth is done via `MC_HOST_molot` (constructed from env vars inside the script) — no `~/.mc/config.json` state.
 
 ## See also
 

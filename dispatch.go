@@ -109,9 +109,10 @@ func shT(suffix string) string {
 	return `"$T"` + shQuote(suffix)
 }
 
-// shS3 emits `"s3://$S3_BUCKET"'<suffix>'`.
+// shS3 emits `"molot/$S3_BUCKET"'<suffix>'` — a minio-client path using the
+// `molot` alias that the wrap script sets via MC_HOST_molot.
 func shS3(suffix string) string {
-	return `"s3://$S3_BUCKET"` + shQuote(suffix)
+	return `"molot/$S3_BUCKET"` + shQuote(suffix)
 }
 
 func parseUIDFromStorePath(p string) string {
