@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path"
@@ -109,8 +110,12 @@ func dispatchNode(ex *Executor, n *Node) {
 		// Retry with exp backoff. Real task failures have ProcessState set
 		// and propagate as a regular fail.
 		if cmd.ProcessState == nil {
-			fmt.Fprintf(os.Stderr, "molot: node %s: spawn error (%v), retrying in %v\n", n.UID, err, delay)
-			time.Sleep(delay)
+			// [delay/2, 3*delay/2) jitter so many concurrent retriers
+			// don't rethunder in lock-step.
+			sleep := delay/2 + time.Duration(rand.Int64N(int64(delay)))
+
+			fmt.Fprintf(os.Stderr, "molot: node %s: spawn error (%v), retrying in %v\n", n.UID, err, sleep)
+			time.Sleep(sleep)
 
 			delay *= 2
 
