@@ -15,21 +15,30 @@ T=$(mktemp -d "$(pwd)/molot.XXXXXXXX")
 trap 'rm -rf "$T"' EXIT
 export T
 
+# overlayfs layout: our deps + node outputs live in upper/, workdir/ is
+# overlayfs bookkeeping. Keeps the host's /ix/store visible as the
+# lower layer so /ix/realm/system/bin symlinks (into busybox etc.) keep
+# resolving — hiding the host's store with a plain bind breaks /bin.
+mkdir -p "$T/upper" "$T/work"
+
 {{range $i, $in := .InDirs -}}
-mkdir -p {{shT $in}}
+mkdir -p {{shTU $in}}
 minio-client cp {{depS3 $in}} {{archT $i}}
-tar --use-compress-program=unzstd -xf {{archT $i}} -C {{shT $in}}
+tar --use-compress-program=unzstd -xf {{archT $i}} -C {{shTU $in}}
 rm -f {{archT $i}}
 {{end}}
-mkdir -p {{shT .Out}}
+mkdir -p {{shTU .Out}}
 
 cat > "$T/inner.sh" <<'MOLOT_INNER_EOF'
 #!/bin/sh
 set -eu
-# Bind only /ix/store — /ix/realm must keep pointing at the host's realm,
-# because /bin is a symlink to /ix/realm/system/bin on stalix; binding
-# over /ix as a whole would break every /bin/* tool inside the ns.
-mount --bind "$T/ix/store" /ix/store
+export PATH=/bin:/ix/realm/system/bin:${PATH:-}
+# Overlay our deps on top of the host's /ix/store so the realm's
+# symlinks into store (e.g. /bin/base64 -> /ix/store/<busybox>/bin/...)
+# keep working while our declared deps shadow whatever the host had.
+mount -t overlay overlay \
+    -o "lowerdir=/ix/store,upperdir=$T/upper,workdir=$T/work" \
+    /ix/store
 cd /
 
 {{range $i, $c := .Cmds -}}
@@ -41,5 +50,5 @@ chmod +x "$T/inner.sh"
 
 unshare -r -U -m "$T/inner.sh"
 
-tar --use-compress-program=zstd -cf {{outT}} -C {{shT .Out}} .
+tar --use-compress-program=zstd -cf {{outT}} -C {{shTU .Out}} .
 minio-client cp {{outT}} {{selfS3 .UID}}
