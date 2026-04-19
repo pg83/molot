@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -63,9 +64,9 @@ func dispatchNode(ex *Executor, n *Node) {
 		fmt.Fprintf(os.Stderr, "---- molot wrap script for %s ----\n%s---- end ----\n", n.UID, script)
 	}
 
-	encoded := base64.StdEncoding.EncodeToString([]byte(script))
-	payload := fmt.Sprintf("echo %s | base64 -d | sh", encoded)
-
+	// The script can reach hundreds of KB on graphs with many in_dirs;
+	// passing it as argv to gorn ignite hits ARG_MAX (E2BIG) on larger
+	// builds. Pipe the body through ignite's --stdin-cmd instead.
 	args := []string{
 		"ignite",
 		"--wait",
@@ -77,8 +78,7 @@ func dispatchNode(ex *Executor, n *Node) {
 		"--env", "AWS_REGION=" + ex.cfg.AWSRegion,
 		"--env", "S3_ENDPOINT=" + ex.cfg.S3Endpt,
 		"--env", "S3_BUCKET=" + ex.cfg.S3Bucket,
-		"--",
-		"sh", "-c", payload,
+		"--stdin-cmd",
 	}
 
 	quiet := ex.cfg.Quiet
@@ -89,6 +89,7 @@ func dispatchNode(ex *Executor, n *Node) {
 	for {
 		cmd := exec.Command(ex.cfg.GornBin, args...)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
+		cmd.Stdin = strings.NewReader(script)
 
 		var stdout, stderr bytes.Buffer
 
@@ -110,7 +111,14 @@ func dispatchNode(ex *Executor, n *Node) {
 		// failed — "too many open files", ENOMEM, transient spawn errors).
 		// Retry with exp backoff. Real task failures have ProcessState set
 		// and propagate as a regular fail.
+		//
+		// E2BIG ("argument list too long") is deterministic given the same
+		// argv, so bail immediately instead of hammering pointlessly.
 		if cmd.ProcessState == nil {
+			if errors.Is(err, syscall.E2BIG) {
+				ThrowFmt("node %s: spawn refused with E2BIG (argv too large for the kernel): %v", n.UID, err)
+			}
+
 			// [delay/2, 3*delay/2) jitter so many concurrent retriers
 			// don't rethunder in lock-step.
 			sleep := delay/2 + time.Duration(rand.Int64N(int64(delay)))
