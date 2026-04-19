@@ -115,7 +115,7 @@ func (ex *Executor) executeNode(n *Node) {
 
 	if ex.cache.Has(guid) {
 		ex.done.Add(1)
-		fmt.Fprintln(os.Stderr, clr(clrG, out))
+		fmt.Fprintln(os.Stderr, clr(clrG, "CACHE "+out))
 
 		return
 	}
@@ -128,12 +128,12 @@ func (ex *Executor) executeNode(n *Node) {
 
 	ex.visitAll(ins)
 
-	fmt.Fprintln(os.Stderr, clr(clrB, out))
+	fmt.Fprintln(os.Stderr, clr(clrB, "ENTER "+out))
 
 	dispatchNode(ex, n)
 
 	ex.cache.Add(guid)
 	ex.done.Add(1)
 
-	fmt.Fprintln(os.Stderr, clr(clrG, out))
+	fmt.Fprintln(os.Stderr, clr(clrG, "LEAVE "+out))
 }
