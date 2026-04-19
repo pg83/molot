@@ -1,13 +1,35 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
 	"path"
 	"strings"
+	"text/template"
 )
+
+//go:embed wrap.sh.tmpl
+var wrapTmplSrc string
+
+var wrapTmpl = template.Must(template.New("wrap").Funcs(template.FuncMap{
+	"shT":      shT,
+	"archT":    func(i int) string { return shT(fmt.Sprintf("/dep.%d.tar.zst", i)) },
+	"outT":     func() string { return shT("/out.tar.zst") },
+	"depS3":    func(in string) string { return shS3(fmt.Sprintf("/gorn/%s/result.zstd", parseUIDFromStorePath(in))) },
+	"selfS3":   func(uid string) string { return shS3(fmt.Sprintf("/gorn/%s/result.zstd", uid)) },
+	"stdinB64": func(c Cmd) string { return shQuote(base64.StdEncoding.EncodeToString([]byte(c.Stdin))) },
+	"cmdLine":  cmdLine,
+}).Parse(wrapTmplSrc))
+
+type wrapCtx struct {
+	UID    string
+	InDirs []string
+	Out    string
+	Cmds   []Cmd
+}
 
 func dispatchNode(ex *Executor, n *Node) {
 	script := buildWrapScript(n)
@@ -45,95 +67,35 @@ func dispatchNode(ex *Executor, n *Node) {
 }
 
 func buildWrapScript(n *Node) string {
-	var b strings.Builder
-
-	b.WriteString("#!/bin/sh\nset -eu\n\n")
-	b.WriteString(`: "${AWS_ACCESS_KEY_ID:?}"` + "\n")
-	b.WriteString(`: "${AWS_SECRET_ACCESS_KEY:?}"` + "\n")
-	b.WriteString(`: "${S3_ENDPOINT:?}"` + "\n")
-	b.WriteString(`: "${S3_BUCKET:?}"` + "\n\n")
-
-	b.WriteString(`T=$(mktemp -d -t molot.XXXXXXXX)` + "\n")
-	b.WriteString(`trap 'rm -rf "$T"' EXIT` + "\n")
-	b.WriteString(`export T` + "\n\n")
-
-	writeDepFetches(&b, n)
-	writeOutDirScaffold(&b, n)
-	writeInnerScript(&b, n)
-	writeUnshareInvocation(&b)
-	writeResultUpload(&b, n)
-
-	return b.String()
-}
-
-func writeOutDirScaffold(b *strings.Builder, n *Node) {
-	fmt.Fprintf(b, "mkdir -p %s\n\n", shT(n.OutDirs[0]))
-}
-
-func writeDepFetches(b *strings.Builder, n *Node) {
-	for i, in := range n.InDirs {
-		depUID := parseUIDFromStorePath(in)
-		archive := shT(fmt.Sprintf("/dep.%d.tar.zst", i))
-		s3key := shS3(fmt.Sprintf("/gorn/%s/result.zstd", depUID))
-
-		fmt.Fprintf(b, "mkdir -p %s\n", shT(in))
-		fmt.Fprintf(b, "aws s3 cp --endpoint-url \"$S3_ENDPOINT\" %s %s\n", s3key, archive)
-		fmt.Fprintf(b, "tar --use-compress-program=unzstd -xf %s -C %s\n", archive, shT(in))
-		fmt.Fprintf(b, "rm -f %s\n", archive)
+	ctx := wrapCtx{
+		UID:    n.UID,
+		InDirs: n.InDirs,
+		Out:    n.OutDirs[0],
+		Cmds:   n.Cmds,
 	}
 
-	b.WriteString("\n")
+	var buf strings.Builder
+	Throw(wrapTmpl.Execute(&buf, ctx))
+
+	return buf.String()
 }
 
-func writeInnerScript(b *strings.Builder, n *Node) {
-	b.WriteString(`cat > "$T/inner.sh" <<'MOLOT_INNER_EOF'` + "\n")
-	b.WriteString("#!/bin/sh\nset -eu\n")
-	b.WriteString(`mount --bind "$T/ix" /ix` + "\n")
-	b.WriteString("cd /\n\n")
-
-	for i, c := range n.Cmds {
-		fmt.Fprintf(b, "# cmd %d\n", i)
-		writeOneCmd(b, &c)
-	}
-
-	b.WriteString("MOLOT_INNER_EOF\n")
-	b.WriteString(`chmod +x "$T/inner.sh"` + "\n\n")
-}
-
-func writeOneCmd(b *strings.Builder, c *Cmd) {
+func cmdLine(c Cmd) string {
 	if len(c.Args) == 0 {
 		ThrowFmt("cmd with empty args")
 	}
 
-	stdinB64 := base64.StdEncoding.EncodeToString([]byte(c.Stdin))
-
-	envParts := []string{"env", "-i"}
+	parts := []string{"env", "-i"}
 
 	for k, v := range c.Env {
-		envParts = append(envParts, shQuote(k+"="+v))
+		parts = append(parts, shQuote(k+"="+v))
 	}
 
 	for _, a := range c.Args {
-		envParts = append(envParts, shQuote(a))
+		parts = append(parts, shQuote(a))
 	}
 
-	fmt.Fprintf(b, "printf %%s %s | base64 -d | %s\n",
-		shQuote(stdinB64),
-		strings.Join(envParts, " "),
-	)
-}
-
-func writeUnshareInvocation(b *strings.Builder) {
-	b.WriteString(`unshare -r -U -m "$T/inner.sh"` + "\n\n")
-}
-
-func writeResultUpload(b *strings.Builder, n *Node) {
-	out := n.OutDirs[0]
-	archive := shT("/out.tar.zst")
-	s3key := shS3(fmt.Sprintf("/gorn/%s/result.zstd", n.UID))
-
-	fmt.Fprintf(b, "tar --use-compress-program=zstd -cf %s -C %s .\n", archive, shT(out))
-	fmt.Fprintf(b, "aws s3 cp --endpoint-url \"$S3_ENDPOINT\" %s %s\n", archive, s3key)
+	return strings.Join(parts, " ")
 }
 
 func shQuote(s string) string {

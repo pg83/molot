@@ -1,0 +1,37 @@
+#!/bin/sh
+set -eu
+
+: "${AWS_ACCESS_KEY_ID:?}"
+: "${AWS_SECRET_ACCESS_KEY:?}"
+: "${S3_ENDPOINT:?}"
+: "${S3_BUCKET:?}"
+
+T=$(mktemp -d -t molot.XXXXXXXX)
+trap 'rm -rf "$T"' EXIT
+export T
+
+{{range $i, $in := .InDirs -}}
+mkdir -p {{shT $in}}
+aws s3 cp --endpoint-url "$S3_ENDPOINT" {{depS3 $in}} {{archT $i}}
+tar --use-compress-program=unzstd -xf {{archT $i}} -C {{shT $in}}
+rm -f {{archT $i}}
+{{end}}
+mkdir -p {{shT .Out}}
+
+cat > "$T/inner.sh" <<'MOLOT_INNER_EOF'
+#!/bin/sh
+set -eu
+mount --bind "$T/ix" /ix
+cd /
+
+{{range $i, $c := .Cmds -}}
+# cmd {{$i}}
+printf %s {{stdinB64 $c}} | base64 -d | {{cmdLine $c}}
+{{end}}
+MOLOT_INNER_EOF
+chmod +x "$T/inner.sh"
+
+unshare -r -U -m "$T/inner.sh"
+
+tar --use-compress-program=zstd -cf {{outT}} -C {{shT .Out}} .
+aws s3 cp --endpoint-url "$S3_ENDPOINT" {{outT}} {{selfS3 .UID}}
