@@ -43,8 +43,8 @@ var wrapTmpl = template.Must(template.New("wrap").Funcs(template.FuncMap{
 	"shUpper":  shUpper,
 	"archT":    func(i int) string { return shT(fmt.Sprintf("/dep.%d.tar.zst", i)) },
 	"outT":     func() string { return shT("/out.tar.zst") },
-	"depS3":    func(in string) string { return shS3(fmt.Sprintf("/gorn/%s/result.zstd", gornGUID(parseUIDFromStorePath(in)))) },
-	"selfS3":   func(uid string) string { return shS3(fmt.Sprintf("/gorn/%s/result.zstd", gornGUID(uid))) },
+	"depS3":    func(in string) string { return shS3Root(fmt.Sprintf("/%s/result.zstd", gornGUID(parseUIDFromStorePath(in)))) },
+	"selfS3":   func(uid string) string { return shS3Root(fmt.Sprintf("/%s/result.zstd", gornGUID(uid))) },
 	"stdinB64": func(c Cmd) string { return shQuote(base64.StdEncoding.EncodeToString([]byte(c.Stdin))) },
 	"cmdLine":  cmdLine,
 }).Parse(wrapTmplSrc))
@@ -73,11 +73,13 @@ func dispatchNode(ex *Executor, n *Node) {
 		"--guid", gornGUID(n.UID),
 		"--descr", n.OutDirs[0],
 		"--api", ex.cfg.GornAPI,
+		"--root", ex.cfg.S3Root,
 		"--env", "AWS_ACCESS_KEY_ID=" + ex.cfg.AWSKey,
 		"--env", "AWS_SECRET_ACCESS_KEY=" + ex.cfg.AWSSecret,
 		"--env", "AWS_REGION=" + ex.cfg.AWSRegion,
 		"--env", "S3_ENDPOINT=" + ex.cfg.S3Endpt,
 		"--env", "S3_BUCKET=" + ex.cfg.S3Bucket,
+		"--env", "MOLOT_S3_ROOT=" + ex.cfg.S3Root,
 		"--stdin-cmd",
 	}
 
@@ -215,10 +217,12 @@ func shUpper(abs string) string {
 }
 
 
-// shS3 emits `"molot/$S3_BUCKET"'<suffix>'` — a minio-client path using the
-// `molot` alias that the wrap script sets via MC_HOST_molot.
-func shS3(suffix string) string {
-	return `"molot/$S3_BUCKET"` + shQuote(suffix)
+// shS3Root emits `"molot/$S3_BUCKET/$MOLOT_S3_ROOT"'<suffix>'` —
+// a minio-client path rooted at the configurable prefix under the
+// bucket. "molot" is the minio-client alias (set via MC_HOST_molot);
+// $MOLOT_S3_ROOT is exported by the outer wrap.
+func shS3Root(suffix string) string {
+	return `"molot/$S3_BUCKET/$MOLOT_S3_ROOT"` + shQuote(suffix)
 }
 
 func parseUIDFromStorePath(p string) string {
