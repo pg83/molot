@@ -26,7 +26,10 @@ mkdir -p {{shT .Out}}
 cat > "$T/inner.sh" <<'MOLOT_INNER_EOF'
 #!/bin/sh
 set -eu
-mount --bind "$T/ix" /ix
+# Bind only /ix/store — /ix/realm must keep pointing at the host's realm,
+# because /bin is a symlink to /ix/realm/system/bin on stalix; binding
+# over /ix as a whole would break every /bin/* tool inside the ns.
+mount --bind "$T/ix/store" /ix/store
 cd /
 
 {{range $i, $c := .Cmds -}}
