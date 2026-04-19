@@ -25,6 +25,9 @@ Optional env:
   MOLOT_GORN              path to gorn binary; default "gorn"
   MOLOT_DUMP              if set, prints each node's wrap script to stderr
                           before dispatching (for debugging)
+  MOLOT_QUIET             if set, suppress per-node stdout/stderr from
+                          "gorn ignite" in the live stream; only dump the
+                          buffered logs for nodes that fail
 
 Example:
   cd ix && IX_DUMP_GRAPH=1 ./ix build lib/c | molot

@@ -37,6 +37,7 @@ MOLOT_GORN=/bin/true MOLOT_DUMP=1 ./molot < graph.json
 | `AWS_REGION` | no | default `us-east-1` |
 | `MOLOT_GORN` | no | path to `gorn` binary; default `gorn` |
 | `MOLOT_DUMP` | no | if set, prints each node's wrap script to stderr before dispatching |
+| `MOLOT_QUIET` | no | if set, don't stream per-node `gorn ignite` stdout/stderr; only dump them if a node fails |
 
 ## Graph format
 
