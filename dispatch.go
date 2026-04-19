@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"text/template"
+	"time"
 )
 
 //go:embed wrap.sh.tmpl
@@ -78,24 +79,48 @@ func dispatchNode(ex *Executor, n *Node) {
 		"sh", "-c", payload,
 	}
 
-	cmd := exec.Command(ex.cfg.GornBin, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
-
 	quiet := os.Getenv("MOLOT_QUIET") != ""
 
-	var stdout, stderr bytes.Buffer
+	delay := time.Second
+	const maxDelay = 60 * time.Second
 
-	if quiet {
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-	} else {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-	}
+	for {
+		cmd := exec.Command(ex.cfg.GornBin, args...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 
-	err := cmd.Run()
+		var stdout, stderr bytes.Buffer
 
-	if err != nil {
+		if quiet {
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+		} else {
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+		}
+
+		err := cmd.Run()
+
+		if err == nil {
+			return
+		}
+
+		// ProcessState nil means the subprocess never started (fork/exec
+		// failed — "too many open files", ENOMEM, transient spawn errors).
+		// Retry with exp backoff. Real task failures have ProcessState set
+		// and propagate as a regular fail.
+		if cmd.ProcessState == nil {
+			fmt.Fprintf(os.Stderr, "molot: node %s: spawn error (%v), retrying in %v\n", n.UID, err, delay)
+			time.Sleep(delay)
+
+			delay *= 2
+
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+
+			continue
+		}
+
 		if quiet {
 			fmt.Fprintf(os.Stderr, "---- molot: stdout of failed node %s ----\n", n.UID)
 			_, _ = os.Stderr.Write(stdout.Bytes())
