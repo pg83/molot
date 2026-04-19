@@ -71,9 +71,10 @@ mount --rbind /dev /dev
 # /tmp and /dev/shm: many configure/make/install scripts drop files
 # here (Python's bdist, compileall, meson's introspection, etc.) and
 # silently lose data if the location isn't a plain writable dir. The
-# host's /tmp in our user ns may be restricted; give them fresh tmpfs
-# of their own. /dev/shm is mounted *after* the /dev rbind so it
-# overrides within our ns without touching host.
+# host's /tmp in our user ns may be restricted or absent entirely;
+# give them fresh tmpfs of their own. /dev/shm is mounted *after*
+# the /dev rbind so it overrides within our ns without touching host.
+mkdir -p /tmp /dev/shm
 mount -t tmpfs tmpfs /tmp
 mount -t tmpfs tmpfs /dev/shm
 
