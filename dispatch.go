@@ -36,6 +36,7 @@ func gornGUID(uid string) string {
 var wrapTmpl = template.Must(template.New("wrap").Funcs(template.FuncMap{
 	"shT":      shT,
 	"shStore":  shQuote,
+	"shUpper":  shUpper,
 	"archT":    func(i int) string { return shT(fmt.Sprintf("/dep.%d.tar.zst", i)) },
 	"outT":     func() string { return shT("/out.tar.zst") },
 	"depS3":    func(in string) string { return shS3(fmt.Sprintf("/gorn/%s/result.zstd", gornGUID(parseUIDFromStorePath(in)))) },
@@ -128,6 +129,21 @@ func shQuote(s string) string {
 // suppressing the expansion.
 func shT(suffix string) string {
 	return `"$T"` + shQuote(suffix)
+}
+
+// shUpper translates an absolute /ix/store/<uid>-<name> path into the
+// corresponding path inside the overlay upper dir, i.e.
+// "$T"'/ovl/upper/<uid>-<name>'. Used to address the upper layer directly
+// (before overlay is mounted, or for operations overlay forbids through
+// the mount such as user.overlay.* xattr writes in userxattr mode).
+func shUpper(abs string) string {
+	const prefix = "/ix/store/"
+
+	if !strings.HasPrefix(abs, prefix) {
+		ThrowFmt("shUpper: path %q does not start with %s", abs, prefix)
+	}
+
+	return `"$T"` + shQuote("/ovl/upper/"+strings.TrimPrefix(abs, prefix))
 }
 
 

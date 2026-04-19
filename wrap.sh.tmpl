@@ -28,6 +28,21 @@ export PATH=/bin:/ix/realm/system/bin:${PATH:-}
 mkdir -p "$T/ovl"
 mount -t tmpfs tmpfs "$T/ovl"
 mkdir -p "$T/ovl/upper" "$T/ovl/work"
+
+# Pre-create our node's dirs in upper and mark them opaque — tells
+# overlayfs to hide whatever the host's /ix/store has under the same
+# uid, so the cmd's `rm -rf ${out}` doesn't try to whiteout per-file
+# against lower (which fails with EACCES in rootless overlay).
+# Must be done BEFORE mounting overlay, and directly on the upper path:
+# in userxattr mode overlay itself rejects writes to user.overlay.*
+# via the overlay mount.
+{{range $i, $in := .InDirs -}}
+mkdir -p {{shUpper $in}}
+setfattr -n user.overlay.opaque -v y {{shUpper $in}}
+{{end -}}
+mkdir -p {{shUpper .Out}}
+setfattr -n user.overlay.opaque -v y {{shUpper .Out}}
+
 mount -t overlay overlay \
     -o "lowerdir=/ix/store,upperdir=$T/ovl/upper,workdir=$T/ovl/work,userxattr" \
     /ix/store
@@ -39,20 +54,11 @@ mount -t overlay overlay \
 # user ns caused EACCES on overlay whiteouts).
 mount -t tmpfs tmpfs /ix/build
 
-# Mark each of our store dirs as "opaque" in the overlay — tells
-# overlayfs to hide whatever the host's /ix/store may have under the
-# same uid so the cmd's `rm -rf ${out}` doesn't need to create
-# per-file whiteouts on the lower layer (which fails with EACCES for
-# rootless overlayfs). setfattr on a lower-only path triggers copy-up.
 {{range $i, $in := .InDirs -}}
-mkdir -p {{shStore $in}}
-setfattr -n user.overlay.opaque -v y {{shStore $in}}
 minio-client cp {{depS3 $in}} {{archT $i}}
 tar --use-compress-program=unzstd -xf {{archT $i}} -C {{shStore $in}}
 rm -f {{archT $i}}
 {{end}}
-mkdir -p {{shStore .Out}}
-setfattr -n user.overlay.opaque -v y {{shStore .Out}}
 
 cd /
 
