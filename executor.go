@@ -96,7 +96,7 @@ func (ex *Executor) visitAll(outs []string) {
 			})
 
 			exc.Catch(func(e *Exception) {
-				fmt.Fprintln(os.Stderr, "molot: node failed:", e.Error())
+				fmt.Fprintln(os.Stderr, clr(clrR, "molot: node failed: "+e.Error()))
 				os.Exit(2)
 			})
 		}()
@@ -116,9 +116,9 @@ func (ex *Executor) executeNode(n *Node) {
 
 	ex.visitAll(ins)
 
-	fmt.Fprintf(os.Stderr, "molot: [%d] ENTER %s out=%s\n", ex.total.Load(), n.UID, n.OutDirs[0])
+	fmt.Fprintln(os.Stderr, clr(clrB, fmt.Sprintf("molot: [%d] ENTER %s out=%s", ex.total.Load(), n.UID, n.OutDirs[0])))
 
 	dispatchNode(ex, n)
 
-	fmt.Fprintf(os.Stderr, "molot: [%d] LEAVE %s\n", ex.done.Add(1), n.UID)
+	fmt.Fprintln(os.Stderr, clr(clrG, fmt.Sprintf("molot: [%d] LEAVE %s", ex.done.Add(1), n.UID)))
 }

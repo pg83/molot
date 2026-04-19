@@ -114,7 +114,7 @@ func dispatchNode(ex *Executor, n *Node) {
 			// don't rethunder in lock-step.
 			sleep := delay/2 + time.Duration(rand.Int64N(int64(delay)))
 
-			fmt.Fprintf(os.Stderr, "molot: node %s: spawn error (%v), retrying in %v\n", n.UID, err, sleep)
+			fmt.Fprintln(os.Stderr, clr(clrY, fmt.Sprintf("molot: node %s: spawn error (%v), retrying in %v", n.UID, err, sleep)))
 			time.Sleep(sleep)
 
 			delay *= 2
@@ -127,11 +127,11 @@ func dispatchNode(ex *Executor, n *Node) {
 		}
 
 		if quiet {
-			fmt.Fprintf(os.Stderr, "---- molot: stdout of failed node %s ----\n", n.UID)
+			fmt.Fprintln(os.Stderr, clr(clrR, "---- molot: stdout of failed node "+n.UID+" ----"))
 			_, _ = os.Stderr.Write(stdout.Bytes())
-			fmt.Fprintf(os.Stderr, "---- molot: stderr of failed node %s ----\n", n.UID)
+			fmt.Fprintln(os.Stderr, clr(clrR, "---- molot: stderr of failed node "+n.UID+" ----"))
 			_, _ = os.Stderr.Write(stderr.Bytes())
-			fmt.Fprintf(os.Stderr, "---- end ----\n")
+			fmt.Fprintln(os.Stderr, clr(clrR, "---- end ----"))
 		}
 
 		ThrowFmt("node %s (out=%s) failed via gorn ignite: %v", n.UID, n.OutDirs[0], err)
