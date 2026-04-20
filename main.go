@@ -11,7 +11,7 @@ Distributed executor for IX build graphs over gorn. Reads a JSON graph on
 stdin (same shape as ix/pkgs/bin/assemble/as.go consumes), dispatches each
 node as a separate gorn task via "gorn ignite --wait", with the IX node
 uid as the gorn GUID. Artifacts land at
-  s3://$S3_BUCKET/gorn/molot-<tmpl-sha>-<uid>/result.zstd
+  s3://$S3_BUCKET/molot/<uid>/result.zstd
 (tar+zstd of the node's out_dir).
 
 Settings precedence: CLI flags > env vars > --config JSON file > defaults.
@@ -36,7 +36,7 @@ func main() {
 	// into every uid. Any change to wrap.sh.tmpl shifts the hash, so
 	// every uid naturally invalidates when the wrap logic changes.
 	if len(os.Args) == 2 && os.Args[1] == "hash" {
-		fmt.Println(guidPrefix)
+		fmt.Println(tmplHash)
 		os.Exit(0)
 	}
 
@@ -70,7 +70,7 @@ func run() {
 		n := findNode(g, cfg.UID)
 		fmt.Fprintln(os.Stderr, clr(clrB, fmt.Sprintf("--uid %s: dispatching single node, skipping dep traversal", cfg.UID)))
 		dispatchNode(ex, n)
-		ex.cache.Add(gornGUID(n.UID))
+		ex.cache.Add(n.UID)
 
 		return
 	}

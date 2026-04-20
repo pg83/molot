@@ -100,7 +100,7 @@ func (ex *Executor) visitAll(outs []string) {
 func (ex *Executor) executeNode(n *Node) {
 	ex.total.Add(1)
 
-	guid := gornGUID(n.UID)
+	guid := n.UID
 	out := n.OutDirs[0]
 
 	if ex.cache.Has(guid) {

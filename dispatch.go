@@ -22,21 +22,16 @@ import (
 //go:embed wrap.sh.tmpl
 var wrapTmplSrc string
 
-// guidPrefix scopes molot's gorn GUIDs into their own namespace AND binds them
-// to the wrap-script template hash. Any change to wrap.sh.tmpl shifts the
-// prefix, which in turn invalidates every cached gorn result (idempotency
-// key = GUID = prefix+uid). This is the CAS contract: node uid alone is
-// insufficient — the executor's side of the contract (download/mount/run/
-// upload mechanics) is equally part of what determines correctness.
-var guidPrefix = func() string {
+// tmplHash is the first 12 hex chars of sha256(wrap.sh.tmpl). IX's
+// ops_molot.py queries it via `molot hash` and mixes it into every
+// node's uid through die/sh0.sh's `{{molot}}` template comment, so a
+// wrap.sh.tmpl edit already rotates every uid across the fleet — we
+// don't re-prefix it onto the gorn GUID here.
+var tmplHash = func() string {
 	h := sha256.Sum256([]byte(wrapTmplSrc))
 
-	return "molot-" + hex.EncodeToString(h[:])[:12] + "-"
+	return hex.EncodeToString(h[:])[:12]
 }()
-
-func gornGUID(uid string) string {
-	return guidPrefix + uid
-}
 
 var wrapTmpl = template.Must(template.New("wrap").Funcs(template.FuncMap{
 	"shT":      shT,
@@ -44,8 +39,8 @@ var wrapTmpl = template.Must(template.New("wrap").Funcs(template.FuncMap{
 	"shUpper":  shUpper,
 	"archT":    func(i int) string { return shT(fmt.Sprintf("/dep.%d.tar.zst", i)) },
 	"outT":     func() string { return shT("/out.tar.zst") },
-	"depS3":    func(in string) string { return shS3Root(fmt.Sprintf("/%s/result.zstd", gornGUID(parseUIDFromStorePath(in)))) },
-	"selfS3":   func(uid string) string { return shS3Root(fmt.Sprintf("/%s/result.zstd", gornGUID(uid))) },
+	"depS3":    func(in string) string { return shS3Root(fmt.Sprintf("/%s/result.zstd", parseUIDFromStorePath(in))) },
+	"selfS3":   func(uid string) string { return shS3Root(fmt.Sprintf("/%s/result.zstd", uid)) },
 	"stdinB64": func(c Cmd) string { return shQuote(base64.StdEncoding.EncodeToString([]byte(c.Stdin))) },
 	"cmdLine":  cmdLine,
 }).Parse(wrapTmplSrc))
@@ -80,7 +75,7 @@ func dispatchNode(ex *Executor, n *Node) {
 	args := []string{
 		"ignite",
 		"--wait",
-		"--guid", gornGUID(n.UID),
+		"--guid", n.UID,
 		"--descr", n.OutDirs[0],
 		"--api", ex.cfg.GornAPI,
 		"--root", ex.cfg.S3Root,

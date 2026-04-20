@@ -103,6 +103,6 @@ Integration test: generate a real graph with `IX_DUMP_GRAPH=1 ./ix build <pkg>` 
 
 ## Misc
 
-- `guidPrefix = "molot-" + sha256(wrap.sh.tmpl)[:12] + "-"` — any byte change to `wrap.sh.tmpl` rotates every node's GUID, so the first run after a wrap edit rebuilds the graph from scratch. Knob-only changes (timeouts, flags) belong in `dispatch.go` / config, not in the template.
+- gorn GUID **is** the node uid — no extra prefix. The wrap-template hash is already baked into every uid via IX's `ops_molot.py`: it calls `molot hash` (prints `sha256(wrap.sh.tmpl)[:12]`) and injects the result as `IX_FLAGS[molot]=...`, which `die/sh0.sh`'s `{{molot}}` marker mixes into the build script, which in turn feeds IX's uid hash. So a `wrap.sh.tmpl` edit still rotates every uid across the fleet — just through ops_molot.py, not a second prefix at dispatch time.
 - Slots per node: 1 by default, `Config.FullSlots` when `node.Pool == "full"`. `node.Pool == "network"` controls network isolation, not slot count: pool=network cmds run as-is, everything else is wrapped in `/bin/unshare -r -n` inside `inner.sh` (matches `assemble.go`'s net-deny). `MOLOT_CPUS` (gorn-injected) is the `MAKE_THRS` source; don't re-derive.
 - gorn speaks scripts, not argv: dispatch pipes the rendered `wrap.sh` directly to `gorn ignite` stdin — no `--stdin-cmd` flag, no outer `timeout sh -c` wrapper. The 2h cap lives on the inner `unshare` line of `wrap.sh.tmpl`.
