@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eu
+set -eux
 
 : "${AWS_ACCESS_KEY_ID:?}"
 : "${AWS_SECRET_ACCESS_KEY:?}"
@@ -20,7 +20,7 @@ export MOLOT_MAKE_THRS={{.Threads}}
 
 cat > "$T/inner.sh" <<'MOLOT_INNER_EOF'
 #!/bin/sh
-set -eu
+set -eux
 export PATH=/bin:/ix/realm/system/bin:${PATH:-}
 
 # Fresh tmpfs as overlayfs upper/work, mounted inside the user+mount ns.
