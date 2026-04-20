@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/template"
@@ -50,11 +51,10 @@ var wrapTmpl = template.Must(template.New("wrap").Funcs(template.FuncMap{
 }).Parse(wrapTmplSrc))
 
 type wrapCtx struct {
-	UID     string
-	InDirs  []string
-	Out     string
-	Cmds    []Cmd
-	Threads int
+	UID    string
+	InDirs []string
+	Out    string
+	Cmds   []Cmd
 	// Net is true only for pool=network nodes (fetch tasks); every
 	// other cmd is wrapped in `unshare -r -n` so it runs in a fresh,
 	// empty network namespace. Matches assemble.go's net-deny policy.
@@ -71,6 +71,12 @@ func dispatchNode(ex *Executor, n *Node) {
 	// The script can reach hundreds of KB on graphs with many in_dirs;
 	// passing it as argv to gorn ignite hits ARG_MAX (E2BIG) on larger
 	// builds. Pipe the body through ignite's --stdin-cmd instead.
+	slots := 1
+
+	if n.Pool == "full" {
+		slots = ex.cfg.FullSlots
+	}
+
 	args := []string{
 		"ignite",
 		"--wait",
@@ -78,6 +84,7 @@ func dispatchNode(ex *Executor, n *Node) {
 		"--descr", n.OutDirs[0],
 		"--api", ex.cfg.GornAPI,
 		"--root", ex.cfg.S3Root,
+		"--slots", strconv.Itoa(slots),
 		"--env", "AWS_ACCESS_KEY_ID=" + ex.cfg.AWSKey,
 		"--env", "AWS_SECRET_ACCESS_KEY=" + ex.cfg.AWSSecret,
 		"--env", "AWS_REGION=" + ex.cfg.AWSRegion,
@@ -155,12 +162,11 @@ func dispatchNode(ex *Executor, n *Node) {
 
 func buildWrapScript(ex *Executor, n *Node) string {
 	ctx := wrapCtx{
-		UID:     n.UID,
-		InDirs:  n.InDirs,
-		Out:     n.OutDirs[0],
-		Cmds:    n.Cmds,
-		Threads: ex.threads(),
-		Net:     n.Pool == "network",
+		UID:    n.UID,
+		InDirs: n.InDirs,
+		Out:    n.OutDirs[0],
+		Cmds:   n.Cmds,
+		Net:    n.Pool == "network",
 	}
 
 	var buf strings.Builder

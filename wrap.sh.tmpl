@@ -16,7 +16,8 @@ T=$(mktemp -d "$(pwd)/molot.XXXXXXXX")
 trap 'rm -rf "$T"' EXIT
 export T
 
-export MOLOT_MAKE_THRS={{.Threads}}
+: "${MOLOT_CPUS:?}"
+export MOLOT_MAKE_THRS="${MOLOT_CPUS}"
 
 cat > "$T/inner.sh" <<'MOLOT_INNER_EOF'
 #!/bin/sh

@@ -5,8 +5,17 @@ import (
 	"flag"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 )
+
+func setFromFlagInt(fs *flag.FlagSet, name string, a, b int) int {
+	if flagWasSet(fs, name) {
+		return b
+	}
+
+	return a
+}
 
 var envRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
@@ -35,6 +44,7 @@ type Config struct {
 	AWSSecret string `json:"aws_secret_access_key,omitempty"`
 	AWSRegion string `json:"aws_region,omitempty"`
 	S3Root    string `json:"s3_root,omitempty"`
+	FullSlots int    `json:"full_slots,omitempty"`
 	CacheFile string `json:"cache_file,omitempty"`
 	Dump      bool   `json:"dump,omitempty"`
 	Quiet     bool   `json:"quiet,omitempty"`
@@ -51,6 +61,7 @@ type cliOpts struct {
 	awsSecret string
 	awsRegion string
 	s3Root    string
+	fullSlots int
 	cacheFile string
 	dump      bool
 	quiet     bool
@@ -72,6 +83,7 @@ func parseCLI(args []string) (*cliOpts, *flag.FlagSet) {
 	fs.StringVar(&o.awsRegion, "aws-region", "", "S3 region (env AWS_REGION; default us-east-1)")
 	fs.StringVar(&o.gornBin, "gorn", "", "path to gorn binary (env MOLOT_GORN; default \"gorn\")")
 	fs.StringVar(&o.s3Root, "s3-root", "", "S3 key prefix for task artifacts (env MOLOT_S3_ROOT; default \"molot\")")
+	fs.IntVar(&o.fullSlots, "full-slots", 0, "slots requested from gorn for pool=full nodes; all other nodes request 1 (env MOLOT_FULL_SLOTS; default 1)")
 	fs.StringVar(&o.cacheFile, "cache", "", "local success-cache file: one gorn GUID per line; nodes whose GUID is present are skipped (env MOLOT_CACHE)")
 	fs.BoolVar(&o.dump, "dump", false, "dump each generated wrap script to stderr (env MOLOT_DUMP)")
 	fs.BoolVar(&o.quiet, "quiet", false, "suppress per-task stream, print only on failure (env MOLOT_QUIET)")
@@ -140,6 +152,7 @@ func loadConfig(args []string) *Config {
 	c.AWSRegion = setFromFlagStr(fs, "aws-region", c.AWSRegion, o.awsRegion)
 	c.GornBin = setFromFlagStr(fs, "gorn", c.GornBin, o.gornBin)
 	c.S3Root = setFromFlagStr(fs, "s3-root", c.S3Root, o.s3Root)
+	c.FullSlots = setFromFlagInt(fs, "full-slots", c.FullSlots, o.fullSlots)
 	c.CacheFile = setFromFlagStr(fs, "cache", c.CacheFile, o.cacheFile)
 	c.Dump = setFromFlagBool(fs, "dump", c.Dump, o.dump)
 	c.Quiet = setFromFlagBool(fs, "quiet", c.Quiet, o.quiet)
@@ -156,6 +169,10 @@ func loadConfig(args []string) *Config {
 
 	if c.S3Root == "" {
 		c.S3Root = "molot"
+	}
+
+	if c.FullSlots <= 0 {
+		c.FullSlots = 1
 	}
 
 	validate(c)
@@ -198,6 +215,11 @@ func overlayFromEnv(c *Config) {
 
 	if v := os.Getenv("MOLOT_S3_ROOT"); v != "" {
 		c.S3Root = v
+	}
+
+	if v := os.Getenv("MOLOT_FULL_SLOTS"); v != "" {
+		n := Throw2(strconv.Atoi(v))
+		c.FullSlots = n
 	}
 
 	if os.Getenv("MOLOT_DUMP") != "" {

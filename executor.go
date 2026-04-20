@@ -26,16 +26,6 @@ type Executor struct {
 	total   atomic.Uint64
 }
 
-func (ex *Executor) threads() int {
-	t := ex.g.Pools["threads"]
-
-	if t <= 0 {
-		return 1
-	}
-
-	return t
-}
-
 func newExecutor(g *Graph, cfg *Config) *Executor {
 	ex := &Executor{
 		g:       g,
