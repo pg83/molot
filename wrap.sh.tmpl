@@ -79,7 +79,7 @@ cd /
 
 {{range $i, $c := .Cmds -}}
 # cmd {{$i}}
-printf %s {{stdinB64 $c}} | base64 -d | {{cmdLine $c}}
+printf %s {{stdinB64 $c}} | base64 -d | {{if not $.Net}}/bin/unshare -r -n {{end}}{{cmdLine $c}}
 {{end}}
 
 tar --use-compress-program=zstd -cf {{outT}} -C {{shStore .Out}} .

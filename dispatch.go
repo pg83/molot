@@ -55,6 +55,10 @@ type wrapCtx struct {
 	Out     string
 	Cmds    []Cmd
 	Threads int
+	// Net is true only for pool=network nodes (fetch tasks); every
+	// other cmd is wrapped in `unshare -r -n` so it runs in a fresh,
+	// empty network namespace. Matches assemble.go's net-deny policy.
+	Net bool
 }
 
 func dispatchNode(ex *Executor, n *Node) {
@@ -156,6 +160,7 @@ func buildWrapScript(ex *Executor, n *Node) string {
 		Out:     n.OutDirs[0],
 		Cmds:    n.Cmds,
 		Threads: ex.threads(),
+		Net:     n.Pool == "network",
 	}
 
 	var buf strings.Builder
