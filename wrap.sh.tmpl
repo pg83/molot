@@ -33,18 +33,19 @@ mkdir -p "$T/ovl"
 mount -t tmpfs tmpfs "$T/ovl"
 mkdir -p "$T/ovl/upper" "$T/ovl/work"
 
-# Mark only the OUT dir opaque — it's the one the cmd writes into
-# (and rm -rfs), and hiding lower there avoids EACCES on whiteouts
-# in the rootless overlay. Must be done BEFORE mounting overlay and
-# directly on the upper path: in userxattr mode overlay itself
-# rejects writes to user.overlay.* via the overlay mount.
-#
-# Dep IN_dirs are NOT marked opaque. The cmd only reads them; if the
-# S3 artifact we extract into upper is incomplete, overlayfs falls
-# through to the host's lower copy (same uid, same CAS content).
-# This keeps builds from face-planting on a single corrupted upload.
+# Mark OUT and every IN dir opaque. OUT is opaque because the cmd
+# writes into it (and rm -rfs) — hiding lower avoids EACCES on
+# whiteouts in the rootless overlay. IN dirs are opaque because
+# tar -xf runs inside the overlay and, when lower already has the
+# dep at the same CAS uid, copy-up brings root-owned files into
+# our upper that fake-root in the userns can't chown/utime back
+# (EPERM, "File exists"). Opaque isolates tar from lower entirely.
+# Must be set BEFORE overlay mount and directly on the upper path:
+# in userxattr mode overlay itself rejects writes to user.overlay.*
+# through the overlay mount.
 {{range $i, $in := .InDirs -}}
 mkdir -p {{shUpper $in}}
+setfattr -n user.overlay.opaque -v y {{shUpper $in}}
 {{end -}}
 mkdir -p {{shUpper .Out}}
 setfattr -n user.overlay.opaque -v y {{shUpper .Out}}
