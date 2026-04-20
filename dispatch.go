@@ -115,6 +115,8 @@ func dispatchNode(ex *Executor, n *Node) {
 		err := cmd.Run()
 
 		if err == nil {
+			verifyResult(ex, n)
+
 			return
 		}
 
@@ -156,6 +158,34 @@ func dispatchNode(ex *Executor, n *Node) {
 
 		ThrowFmt("node %s (out=%s) failed via gorn ignite: %v", n.UID, n.OutDirs[0], err)
 	}
+}
+
+// verifyResult HEAD-checks that the producer actually uploaded
+// result.zstd for this node. gorn considers a task "done" the moment
+// result.json lands — but the tar+upload happens *after* that in the
+// wrap script, so a kill/OOM/disk-full between exit and upload leaves
+// gorn happy (exit=0, result.json present) with no artifact. Downstream
+// nodes then fail on "Unable to prepare URL for copying" when they try
+// to pull the missing dep, hundreds of lines away from the real cause.
+// Failing here, on the producer itself, makes the root cause obvious.
+func verifyResult(ex *Executor, n *Node) {
+	key := ex.cfg.ResultKey(n.UID)
+
+	cmd := exec.Command("minio-client", "stat", "--json", key)
+	cmd.Env = append(os.Environ(), "MC_HOST_molot="+ex.cfg.MCHost)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	if err == nil {
+		return
+	}
+
+	ThrowFmt("node %s (out=%s): gorn reported success but result.zstd is missing at %s (minio-client stat: %v)\nstdout: %s\nstderr: %s",
+		n.UID, n.OutDirs[0], key, err, stdout.String(), stderr.String())
 }
 
 func buildWrapScript(ex *Executor, n *Node) string {

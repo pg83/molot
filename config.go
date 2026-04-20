@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"regexp"
 	"strconv"
@@ -49,6 +50,15 @@ type Config struct {
 	Dump      bool   `json:"dump,omitempty"`
 	Quiet     bool   `json:"quiet,omitempty"`
 	UID       string `json:"-"` // not meaningful in a config file; runtime-only
+	MCHost    string `json:"-"` // computed in validate(): "<scheme>://<key>:<secret>@<host>"
+}
+
+// ResultKey returns the S3 key (mc alias form) for a node's result.zstd.
+// Same shape the wrap script uploads to via selfS3 and pulls deps from via
+// depS3, kept in one place so rendering (shell) and checking (Go) can't
+// drift.
+func (c *Config) ResultKey(uid string) string {
+	return fmt.Sprintf("molot/%s/%s/%s/result.zstd", c.S3Bucket, c.S3Root, uid)
 }
 
 type cliOpts struct {
@@ -251,4 +261,12 @@ func validate(c *Config) {
 	if c.AWSKey == "" || c.AWSSecret == "" {
 		ThrowFmt("AWS_ACCESS_KEY_ID / --aws-key and AWS_SECRET_ACCESS_KEY / --aws-secret are required")
 	}
+
+	scheme, host, ok := strings.Cut(c.S3Endpt, "://")
+
+	if !ok {
+		ThrowFmt("S3_ENDPOINT missing scheme (expected http://... or https://...): %q", c.S3Endpt)
+	}
+
+	c.MCHost = fmt.Sprintf("%s://%s:%s@%s", scheme, c.AWSKey, c.AWSSecret, host)
 }
