@@ -91,7 +91,6 @@ func dispatchNode(ex *Executor, n *Node) {
 		"--env", "S3_ENDPOINT=" + ex.cfg.S3Endpt,
 		"--env", "S3_BUCKET=" + ex.cfg.S3Bucket,
 		"--env", "MOLOT_S3_ROOT=" + ex.cfg.S3Root,
-		"--stdin-cmd",
 	}
 
 	quiet := ex.cfg.Quiet
@@ -99,21 +98,14 @@ func dispatchNode(ex *Executor, n *Node) {
 	delay := time.Second
 	const maxDelay = 60 * time.Second
 
-	// Wrap the rendered wrap script in BusyBox-compatible `timeout`: 2h
-	// SIGTERM, then 30s SIGKILL. Done here (outside wrap.sh.tmpl) so the
-	// cap can move without perturbing guidPrefix / node GUIDs. BusyBox
-	// timeout takes plain seconds (no suffix) and -k in seconds.
-	//
-	// The rendered script is delivered via stdin; ignite wraps it as
-	// [sh, -c, body]. The sh the worker execs is then:
-	//   sh -c 'exec timeout -k 30 7200 sh -c "<rendered>"'
-	// exec drops the outer shell so timeout owns the pgid.
-	wrapped := "exec /bin/timeout -k 30 7200 /bin/sh -c " + shQuote(script)
-
 	for {
 		cmd := exec.Command(ex.cfg.GornBin, args...)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
-		cmd.Stdin = strings.NewReader(wrapped)
+		// Script body goes through stdin — gorn (v9+) always reads the
+		// script body from ignite's stdin; the --stdin-cmd flag is gone.
+		// Worker writes the script to a memfd and execs it directly, so
+		// there's no ARG_MAX limit on the body.
+		cmd.Stdin = strings.NewReader(script)
 
 		var stdout, stderr bytes.Buffer
 

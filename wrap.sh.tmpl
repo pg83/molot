@@ -89,4 +89,4 @@ minio-client cp {{outT}} {{selfS3 .UID}}
 MOLOT_INNER_EOF
 chmod +x "$T/inner.sh"
 
-unshare -r -U -m "$T/inner.sh"
+exec /bin/timeout -k 30 7200 unshare -r -U -m "$T/inner.sh"
