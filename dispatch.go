@@ -99,10 +99,21 @@ func dispatchNode(ex *Executor, n *Node) {
 	delay := time.Second
 	const maxDelay = 60 * time.Second
 
+	// Wrap the rendered wrap script in BusyBox-compatible `timeout`: 2h
+	// SIGTERM, then 30s SIGKILL. Done here (outside wrap.sh.tmpl) so the
+	// cap can move without perturbing guidPrefix / node GUIDs. BusyBox
+	// timeout takes plain seconds (no suffix) and -k in seconds.
+	//
+	// The rendered script is delivered via stdin; ignite wraps it as
+	// [sh, -c, body]. The sh the worker execs is then:
+	//   sh -c 'exec timeout -k 30 7200 sh -c "<rendered>"'
+	// exec drops the outer shell so timeout owns the pgid.
+	wrapped := "exec /bin/timeout -k 30 7200 /bin/sh -c " + shQuote(script)
+
 	for {
 		cmd := exec.Command(ex.cfg.GornBin, args...)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
-		cmd.Stdin = strings.NewReader(script)
+		cmd.Stdin = strings.NewReader(wrapped)
 
 		var stdout, stderr bytes.Buffer
 
