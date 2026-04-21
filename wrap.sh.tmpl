@@ -71,6 +71,15 @@ mount --rbind /proc /proc
 mount --rbind /sys /sys
 mount --rbind /dev /dev
 
+# /dev/shm as tmpfs. stal-ix hosts don't mount one by default, so the
+# rbind of /dev above leaves it missing. Python's build-time detection
+# sees no working POSIX shm, silently swaps the sysconfig data name,
+# and ships a library that imports a nonexistent _sysconfigdata__linux_
+# at runtime. Mounting here ensures every build sees a functional
+# /dev/shm regardless of what the host has.
+mkdir -p /dev/shm
+mount -t tmpfs tmpfs /dev/shm
+
 {{range $i, $in := .InDirs -}}
 minio-client cp {{depS3 $in}} {{archT $i}}
 tar --use-compress-program=unzstd -xf {{archT $i}} -C {{shStore $in}}
