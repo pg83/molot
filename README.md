@@ -1,6 +1,6 @@
 # molot
 
-Distributed executor for IX build graphs, dispatched through [gorn](../gorn).
+Distributed executor for IX build graphs, dispatched through [gorn](https://github.com/pg83/gorn).
 
 IX emits a full build graph — nodes with `in_dir`, `out_dir`, commands, pool — and passes it to a local executor (`assemble`). **molot** is a drop-in replacement that dispatches each node as a separate gorn task: the wrapper script downloads the node's inputs from S3, runs the command inside a `unshare`d mount namespace that exposes the inputs at the exact paths the graph uses, and uploads the output directory back to S3 as a single `zstd`-compressed tarball.
 
@@ -75,5 +75,5 @@ S3 auth is done via `MC_HOST_molot` (constructed from env vars inside the script
 ## See also
 
 - [`CLAUDE.md`](CLAUDE.md) — rules and invariants for working in this repo
-- [`../gorn`](../gorn) — the queue/dispatch layer
-- [`../ix`](../ix) — the source of build graphs
+- [gorn](https://github.com/pg83/gorn) — the queue/dispatch layer
+- [ix](https://github.com/stal-ix/ix) — the source of build graphs
