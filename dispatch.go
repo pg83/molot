@@ -171,7 +171,14 @@ func dispatchNode(ex *Executor, n *Node) {
 func verifyResult(ex *Executor, n *Node) {
 	key := ex.cfg.ResultKey(n.UID)
 
-	cmd := exec.Command("minio-client", "stat", "--json", key)
+	// mc insists on creating $HOME/.mc even when the alias comes from
+	// MC_HOST_*. The ci_<n> user under which molot runs has no
+	// writable HOME (`mkdir /home/ci_0: permission denied`), so point
+	// mc at a throwaway config dir per call.
+	mcCfg := Throw2(os.MkdirTemp("", "mc-molot-"))
+	defer os.RemoveAll(mcCfg)
+
+	cmd := exec.Command("minio-client", "--config-dir", mcCfg, "stat", "--json", key)
 	cmd.Env = append(os.Environ(), "MC_HOST_molot="+ex.cfg.MCHost)
 
 	var stdout, stderr bytes.Buffer
