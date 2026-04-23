@@ -6,23 +6,21 @@ set -eux
 : "${S3_ENDPOINT:?}"
 : "${S3_BUCKET:?}"
 : "${MOLOT_S3_ROOT:?}"
+: "${MOLOT_CPUS:?}"
 
 S3_SCHEME="${S3_ENDPOINT%%://*}"
 S3_HOST="${S3_ENDPOINT#*://}"
 export MC_HOST_molot="${S3_SCHEME}://${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}@${S3_HOST}"
+export MOLOT_MAKE_THRS="${MOLOT_CPUS}"
+export PATH=/bin:/ix/realm/system/bin:${PATH:-}
 
-echo "molot: whoami=$(whoami) pwd=$(pwd) home=$HOME" >&2
-T=$(mktemp -d "$(pwd)/molot.XXXXXXXX")
-trap 'rm -rf "$T"' EXIT
+# cwd is already a fresh tmpfs inside a user+mount namespace — gorn
+# wrap sets that up for every task. No mktemp / no trap rm / no outer
+# `unshare -r -U -m`: dying ns takes the tmpfs with it.
+T=$(pwd)
 export T
 
-: "${MOLOT_CPUS:?}"
-export MOLOT_MAKE_THRS="${MOLOT_CPUS}"
-
-cat > "$T/inner.sh" <<'MOLOT_INNER_EOF'
-#!/bin/sh
-set -eux
-export PATH=/bin:/ix/realm/system/bin:${PATH:-}
+echo "molot: whoami=$(whoami) pwd=$T home=${HOME:-}" >&2
 
 # Fresh tmpfs as overlayfs upper/work, mounted inside the user+mount ns.
 # A tmpfs created in this ns reliably supports user.overlay.* xattrs
@@ -95,7 +93,3 @@ printf %s {{stdinB64 $c}} | base64 -d | {{if not $.Net}}/bin/unshare -r -n {{end
 
 tar --use-compress-program=zstd -cf {{outT}} -C {{shStore .Out}} .
 minio-client cp {{outT}} {{selfS3 .UID}}
-MOLOT_INNER_EOF
-chmod +x "$T/inner.sh"
-
-exec /bin/unshare -r -U -m "$T/inner.sh"
