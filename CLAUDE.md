@@ -2,6 +2,10 @@
 
 Distributed executor for IX build graphs on top of gorn. Reads the same JSON graph shape that `ix/pkgs/bin/assemble/as.go` consumes (from IX's `Ops.execute_graph` in `ix/core/ops_sys.py`), dispatches each node as a separate gorn task via `gorn ignite --wait`. Per-node wrapping: download all `in_dir` artifacts from S3, `unshare -r -U -m` + `mount --bind` to expose them at the exact paths the graph uses, run the node's commands, tar+zstd the `out_dir` and upload back to S3.
 
+## Coding conventions
+
+- Git author: `claude <claude@users.noreply.github.com>`. Commit messages in English.
+
 ## Architecture
 
 ```
