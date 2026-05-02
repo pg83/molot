@@ -91,7 +91,7 @@ func run() {
 	fmt.Fprintln(os.Stderr, "molot: started, ledger key=s3://"+cfg.S3Bucket+"/"+runKey(started))
 
 	exc := Try(func() {
-		uploadLedger(cfg, Run{StartedAt: started, Targets: g.Targets})
+		uploadLedger(cfg, Run{StartedAt: started, Targets: g.Targets, Nodes: ledger.Snapshot()})
 	})
 
 	exc.Catch(func(e *Exception) {

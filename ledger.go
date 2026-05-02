@@ -43,7 +43,7 @@ func newLedger() *Ledger {
 	}
 
 	go func() {
-		var recs []NodeRec
+		recs := []NodeRec{}
 
 		for {
 			select {
