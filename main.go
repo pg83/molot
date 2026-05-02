@@ -93,16 +93,10 @@ func run() {
 
 	recs := ledger.Close()
 
-	failed, broken := 0, 0
+	failed := 0
 
 	for _, r := range recs {
-		if !r.Failed {
-			continue
-		}
-
-		if r.BrokenBy != "" {
-			broken++
-		} else {
+		if r.Failed {
 			failed++
 		}
 	}
@@ -111,7 +105,7 @@ func run() {
 		StartedAt: started,
 		EndedAt:   time.Now(),
 		Targets:   g.Targets,
-		Failed:    failed+broken > 0,
+		Failed:    failed > 0,
 		Nodes:     recs,
 	}
 
@@ -124,7 +118,7 @@ func run() {
 	})
 
 	if r.Failed {
-		fmt.Fprintln(os.Stderr, clr(clrR, fmt.Sprintf("molot: %d nodes failed, %d broken by dep — exit 2", failed, broken)))
+		fmt.Fprintln(os.Stderr, clr(clrR, fmt.Sprintf("molot: %d nodes failed (incl. broken-by-dep) — exit 2", failed)))
 		os.Exit(2)
 	}
 }

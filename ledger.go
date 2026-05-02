@@ -16,8 +16,6 @@ type NodeRec struct {
 	FinishedAt time.Time `json:"finished_at"`
 	Failed     bool      `json:"failed,omitempty"`
 	Cached     bool      `json:"cached,omitempty"`
-	BrokenBy   string    `json:"broken_by,omitempty"`
-	Error      string    `json:"error,omitempty"`
 }
 
 type Run struct {

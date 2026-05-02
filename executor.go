@@ -8,26 +8,18 @@ import (
 	"time"
 )
 
-type Outcome int
-
-const (
-	OutcomeSuccess Outcome = iota
-	OutcomeFailed
-	OutcomeBroken
-)
-
 type future struct {
-	f       func() Outcome
-	o       sync.Once
-	outcome Outcome
+	f      func() bool
+	o      sync.Once
+	failed bool
 }
 
-func (fu *future) callOnce() Outcome {
+func (fu *future) callOnce() bool {
 	fu.o.Do(func() {
-		fu.outcome = fu.f()
+		fu.failed = fu.f()
 	})
 
-	return fu.outcome
+	return fu.failed
 }
 
 type Executor struct {
@@ -64,7 +56,7 @@ func newExecutor(g *Graph, cfg *Config, ledger *Ledger) *Executor {
 			ex.byOut[tp] = n
 		}
 
-		ex.futures[n.UID] = &future{f: func() Outcome {
+		ex.futures[n.UID] = &future{f: func() bool {
 			return ex.executeNode(n)
 		}}
 	}
@@ -83,12 +75,13 @@ func newExecutor(g *Graph, cfg *Config, ledger *Ledger) *Executor {
 }
 
 // visitAll runs the futures for each touchPath in outs in parallel, waits
-// for all, returns one Outcome per input. Programming errors (panics from
-// inside executeNode) crash the process — node-level failures are
-// captured as OutcomeFailed/OutcomeBroken without unwinding.
-func (ex *Executor) visitAll(outs []string) []Outcome {
+// for all, returns one bool per input — true if that node (or any of its
+// transitive deps) failed. Programming errors (panics from inside
+// executeNode) crash the process; node-level failures are captured as
+// failed=true without unwinding.
+func (ex *Executor) visitAll(outs []string) []bool {
 	wg := &sync.WaitGroup{}
-	results := make([]Outcome, len(outs))
+	results := make([]bool, len(outs))
 
 	for i, o := range outs {
 		n, ok := ex.byOut[o]
@@ -113,7 +106,7 @@ func (ex *Executor) visitAll(outs []string) []Outcome {
 	return results
 }
 
-func (ex *Executor) executeNode(n *Node) Outcome {
+func (ex *Executor) executeNode(n *Node) bool {
 	ex.total.Add(1)
 
 	guid := n.UID
@@ -128,7 +121,7 @@ func (ex *Executor) executeNode(n *Node) Outcome {
 		ex.done.Add(1)
 		fmt.Fprintln(os.Stderr, clr(clrG, ex.progress()+" CACHE "+out))
 
-		return OutcomeSuccess
+		return false
 	}
 
 	ins := make([]string, 0, len(n.InDirs))
@@ -141,25 +134,22 @@ func (ex *Executor) executeNode(n *Node) Outcome {
 
 	brokenBy := ""
 
-	for i, o := range depResults {
-		if o == OutcomeSuccess {
-			continue
+	for i, fld := range depResults {
+		if fld {
+			brokenBy = ex.byOut[ins[i]].UID
+
+			break
 		}
-
-		brokenBy = ex.byOut[ins[i]].UID
-
-		break
 	}
 
 	if brokenBy != "" {
 		rec.FinishedAt = time.Now()
 		rec.Failed = true
-		rec.BrokenBy = brokenBy
 		ex.recordRec(rec)
 
 		fmt.Fprintln(os.Stderr, clr(clrR, ex.progress()+" BROKEN BY DEP "+brokenBy+" "+out))
 
-		return OutcomeBroken
+		return true
 	}
 
 	fmt.Fprintln(os.Stderr, clr(clrB, ex.progress()+" ENTER "+out))
@@ -172,13 +162,12 @@ func (ex *Executor) executeNode(n *Node) Outcome {
 
 	if exc != nil {
 		rec.Failed = true
-		rec.Error = exc.Error()
 		ex.recordRec(rec)
 
 		fmt.Fprintln(os.Stderr, clr(clrR, ex.progress()+" FAILED "+out+": "+exc.Error()))
 		fmt.Fprintln(os.Stderr, clr(clrR, "node failed: "+exc.Error()))
 
-		return OutcomeFailed
+		return true
 	}
 
 	ex.recordRec(rec)
@@ -187,7 +176,7 @@ func (ex *Executor) executeNode(n *Node) Outcome {
 
 	fmt.Fprintln(os.Stderr, clr(clrG, ex.progress()+" LEAVE "+out))
 
-	return OutcomeSuccess
+	return false
 }
 
 func (ex *Executor) recordRec(r NodeRec) {
