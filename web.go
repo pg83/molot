@@ -131,7 +131,7 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
     </thead>
     <tbody>
     {{range .Runs}}
-      <tr class="{{if eq .Status "running"}}table-info{{else if eq .Status "failed"}}table-danger{{else}}table-success{{end}}">
+      <tr class="{{if eq .Status "running"}}table-info{{else if eq .Status "failed"}}table-danger{{else if eq .Status "stuck"}}table-secondary{{else}}table-success{{end}}">
         <td><a href="/run/{{.Key}}"><code>{{.StartedAt}}</code></a></td>
         <td>{{.Duration}}</td>
         <td><strong>{{.Status}}</strong></td>
@@ -222,16 +222,16 @@ func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
 			Bucket: s.cfg.S3Bucket,
 		}
 
-		keys := s.listRuns()
+		entries := s.listRuns()
 
-		for _, k := range keys {
-			run := s.fetchRun(k)
+		for _, e := range entries {
+			run := s.fetchRun(e.Key)
 
 			row := runRow{
-				Key:       k,
+				Key:       e.Key,
 				StartedAt: run.StartedAt.UTC().Format("2006-01-02 15:04:05Z"),
 				Total:     len(run.Nodes),
-				Status:    runStatus(run),
+				Status:    runStatus(run, e.LastModified),
 				Duration:  runDuration(run).Truncate(time.Second).String(),
 			}
 
@@ -360,13 +360,17 @@ func (s *webSrv) handleNodeStream(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// runStatus classifies a run for the index page coloring. EndedAt zero
-// means the start-of-run marker was uploaded but no final upload landed
-// yet — molot is still executing or crashed mid-run; the row stays blue
-// (info) until it converges. After EndedAt is set, Failed picks
-// success/failure.
-func runStatus(r Run) string {
+// runStatus classifies a run for the index coloring. EndedAt zero +
+// fresh LastModified (within 3× heartbeat) = running. EndedAt zero +
+// stale LastModified = stuck (molot crashed before final upload, no
+// heartbeat refreshing the marker). EndedAt set + Failed = failed.
+// Otherwise ok.
+func runStatus(r Run, lastMod time.Time) string {
 	if r.EndedAt.IsZero() {
+		if time.Since(lastMod) > 3*HeartbeatPeriod {
+			return "stuck"
+		}
+
 		return "running"
 	}
 
@@ -439,34 +443,43 @@ func fillBrokenBy(rows []nodeRow, g *Graph, recs []NodeRec) {
 	}
 }
 
-// listRuns returns the most-recent N run keys, newest-first. ISO keys
-// lex-sort chronologically, so reverse sort gives newest first. Keys
-// returned without the "runs/" prefix or ".json" suffix — bare ts.
-func (s *webSrv) listRuns() []string {
+type runEntry struct {
+	Key          string
+	LastModified time.Time
+}
+
+// listRuns returns the most-recent N {key, lastmod} entries newest-
+// first. ISO keys lex-sort chronologically. Keys returned without the
+// "runs/" prefix or ".json" suffix — bare ts. LastModified comes from
+// S3, used by handleIndex to detect stuck running markers (initial
+// upload landed but heartbeat stopped).
+func (s *webSrv) listRuns() []runEntry {
 	const limit = 200
 
-	full := s3ListKeys(context.Background(), s.cfg.S3Cli, s.cfg.S3Bucket, "runs/")
+	full := s3List(context.Background(), s.cfg.S3Cli, s.cfg.S3Bucket, "runs/")
 
-	var keys []string
+	var entries []runEntry
 
-	for _, k := range full {
-		k = strings.TrimPrefix(k, "runs/")
+	for _, e := range full {
+		k := strings.TrimPrefix(e.Key, "runs/")
 		k = strings.TrimSuffix(k, ".json")
 
 		if k == "" {
 			continue
 		}
 
-		keys = append(keys, k)
+		entries = append(entries, runEntry{Key: k, LastModified: e.LastModified})
 	}
 
-	sort.Sort(sort.Reverse(sort.StringSlice(keys)))
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Key > entries[j].Key
+	})
 
-	if len(keys) > limit {
-		keys = keys[:limit]
+	if len(entries) > limit {
+		entries = entries[:limit]
 	}
 
-	return keys
+	return entries
 }
 
 func (s *webSrv) fetchRun(key string) Run {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -98,10 +99,17 @@ func s3PutJSON(ctx context.Context, cli *s3.Client, bucket, key string, body any
 	}))
 }
 
-// s3ListKeys returns object keys under prefix, lex-sorted (S3 default).
-// Pages through ContinuationToken for buckets with more than 1000 objects.
-func s3ListKeys(ctx context.Context, cli *s3.Client, bucket, prefix string) []string {
-	var keys []string
+type s3Entry struct {
+	Key          string
+	LastModified time.Time
+}
+
+// s3List returns objects under prefix, lex-sorted (S3 default). Pages
+// through ContinuationToken for buckets with >1000 objects. Returns
+// (Key, LastModified) so callers can use LM as a liveness signal —
+// the UI uses it to distinguish live running markers from stuck ones.
+func s3List(ctx context.Context, cli *s3.Client, bucket, prefix string) []s3Entry {
+	var out []s3Entry
 	var token *string
 
 	for {
@@ -112,9 +120,11 @@ func s3ListKeys(ctx context.Context, cli *s3.Client, bucket, prefix string) []st
 		}))
 
 		for _, obj := range resp.Contents {
-			if obj.Key != nil {
-				keys = append(keys, *obj.Key)
+			if obj.Key == nil || obj.LastModified == nil {
+				continue
 			}
+
+			out = append(out, s3Entry{Key: *obj.Key, LastModified: *obj.LastModified})
 		}
 
 		if resp.IsTruncated == nil || !*resp.IsTruncated {
@@ -124,5 +134,5 @@ func s3ListKeys(ctx context.Context, cli *s3.Client, bucket, prefix string) []st
 		token = resp.NextContinuationToken
 	}
 
-	return keys
+	return out
 }

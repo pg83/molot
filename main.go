@@ -106,8 +106,19 @@ func run() {
 		fmt.Fprintln(os.Stderr, clr(clrY, "graph upload: "+e.Error()))
 	})
 
+	heartbeatStop := make(chan struct{})
+	heartbeatExit := make(chan struct{})
+
+	go heartbeat(cfg, started, g.Targets, ledger, heartbeatStop, heartbeatExit)
+
 	ex := newExecutor(g, cfg, ledger)
 	ex.visitAll(g.Targets)
+
+	// Stop the heartbeat BEFORE writing the final manifest — otherwise
+	// an in-flight heartbeat after Close() could race the final upload
+	// and leave a partial running snapshot as the last write.
+	close(heartbeatStop)
+	<-heartbeatExit
 
 	recs := ledger.Close()
 
@@ -138,6 +149,41 @@ func run() {
 	if r.Failed {
 		fmt.Fprintln(os.Stderr, clr(clrR, fmt.Sprintf("molot: %d nodes failed (incl. broken-by-dep) — exit 2", failed)))
 		os.Exit(2)
+	}
+}
+
+// heartbeat periodically re-uploads the running manifest with the
+// current node-rec snapshot, refreshing the S3 object's LastModified
+// so the UI can distinguish live runs from crashed ones (initial
+// upload landed but no further writes). Best-effort: a transient S3
+// failure logs a warning and the next tick retries; permanent failure
+// just means the run will be classified "stuck" in the UI once
+// HeartbeatPeriod×3 elapses.
+func heartbeat(cfg *Config, started time.Time, targets []string, ledger *Ledger, stop <-chan struct{}, exit chan<- struct{}) {
+	defer close(exit)
+
+	t := time.NewTicker(HeartbeatPeriod)
+	defer t.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			r := Run{
+				StartedAt: started,
+				Targets:   targets,
+				Nodes:     ledger.Snapshot(),
+			}
+
+			exc := Try(func() {
+				uploadLedger(cfg, r)
+			})
+
+			exc.Catch(func(e *Exception) {
+				fmt.Fprintln(os.Stderr, clr(clrY, "ledger heartbeat: "+e.Error()))
+			})
+		}
 	}
 }
 
