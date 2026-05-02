@@ -14,6 +14,14 @@ func (e *Exception) Unwrap() error {
 	return e.what()
 }
 
+func (e *Exception) AsError() error {
+	if e == nil {
+		return nil
+	}
+
+	return e.what()
+}
+
 func (e *Exception) throw() {
 	panic(e)
 }
@@ -22,6 +30,23 @@ func (e *Exception) Catch(cb func(*Exception)) {
 	if e != nil {
 		cb(e)
 	}
+}
+
+// HTTPError is a typed exception payload that carries an HTTP status
+// code alongside the message. Handlers use ThrowHTTP to raise typed
+// 4xx; anything else (S3 error, JSON unmarshal) becomes 500 in
+// sendHTTPException.
+type HTTPError struct {
+	Status int
+	Msg    string
+}
+
+func (e *HTTPError) Error() string {
+	return e.Msg
+}
+
+func ThrowHTTP(status int, format string, args ...any) {
+	New(&HTTPError{Status: status, Msg: fmt.Sprintf(format, args...)}).throw()
 }
 
 func New(err error) *Exception {

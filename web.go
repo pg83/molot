@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"html/template"
@@ -18,6 +19,30 @@ import (
 	"syscall"
 	"time"
 )
+
+func httpError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = fmt.Fprintln(w, msg)
+}
+
+// sendHTTPException is the boundary between the Throw flow and HTTP.
+// ThrowHTTP raises a typed HTTPError; anything else (mc cat / json
+// parse / template Execute) is unexpected and maps to 500. Always
+// log the original to stderr so a 500 in the browser leaves a trail.
+func sendHTTPException(w http.ResponseWriter, r *http.Request, e *Exception) {
+	fmt.Fprintf(os.Stderr, "molot web: %s %s: %s\n", r.Method, r.URL.Path, e.Error())
+
+	var he *HTTPError
+
+	if errors.As(e.AsError(), &he) {
+		httpError(w, he.Status, he.Msg)
+
+		return
+	}
+
+	httpError(w, http.StatusInternalServerError, e.Error())
+}
 
 func webMain(args []string) {
 	fs := flag.NewFlagSet("molot web", flag.ContinueOnError)
@@ -84,7 +109,6 @@ type indexData struct {
 	Runs   []runRow
 	Now    string
 	Bucket string
-	Error  string
 }
 
 var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
@@ -101,8 +125,6 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
     <h1 class="mb-0">molot runs</h1>
     <small class="text-muted">refresh 5s · {{.Now}} · bucket {{.Bucket}}</small>
   </div>
-
-  {{if .Error}}<div class="alert alert-danger"><code>{{.Error}}</code></div>{{end}}
 
   <table class="table table-sm table-striped table-bordered bg-white">
     <thead class="table-dark">
@@ -143,7 +165,6 @@ type runData struct {
 	Nodes      []nodeRow
 	NumNodes   int
 	TotalNodes int
-	Error      string
 }
 
 var runTmpl = template.Must(template.New("run").Parse(`<!DOCTYPE html>
@@ -158,8 +179,6 @@ var runTmpl = template.Must(template.New("run").Parse(`<!DOCTYPE html>
   <a href="/" class="text-decoration-none">&larr; runs</a>
   <h1 class="mt-2">run {{.StartedAt}} {{if .Failed}}<span class="badge bg-danger">failed</span>{{end}}</h1>
   <p class="text-muted">ended: <code>{{.EndedAt}}</code> · {{.NumNodes}} failed nodes (out of {{.TotalNodes}} total)</p>
-
-  {{if .Error}}<div class="alert alert-danger"><code>{{.Error}}</code></div>{{end}}
 
   <table class="table table-sm table-striped table-bordered bg-white">
     <thead class="table-dark">
@@ -194,18 +213,16 @@ var runTmpl = template.Must(template.New("run").Parse(`<!DOCTYPE html>
 </html>`))
 
 func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-
-		return
-	}
-
-	data := indexData{
-		Now:    time.Now().UTC().Format(time.RFC3339),
-		Bucket: s.cfg.S3Bucket,
-	}
-
 	exc := Try(func() {
+		if r.URL.Path != "/" {
+			ThrowHTTP(http.StatusNotFound, "not found")
+		}
+
+		data := indexData{
+			Now:    time.Now().UTC().Format(time.RFC3339),
+			Bucket: s.cfg.S3Bucket,
+		}
+
 		keys := s.listRuns()
 
 		for _, k := range keys {
@@ -227,28 +244,28 @@ func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 			data.Runs = append(data.Runs, row)
 		}
+
+		var buf bytes.Buffer
+		Throw(indexTmpl.Execute(&buf, data))
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		Throw2(w.Write(buf.Bytes()))
 	})
 
 	exc.Catch(func(e *Exception) {
-		data.Error = e.Error()
+		sendHTTPException(w, r, e)
 	})
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = indexTmpl.Execute(w, data)
 }
 
 func (s *webSrv) handleRun(w http.ResponseWriter, r *http.Request) {
-	key := strings.TrimPrefix(r.URL.Path, "/run/")
-
-	if key == "" || strings.Contains(key, "/") {
-		http.Error(w, "bad key", http.StatusBadRequest)
-
-		return
-	}
-
-	data := runData{Key: key}
-
 	exc := Try(func() {
+		key := strings.TrimPrefix(r.URL.Path, "/run/")
+
+		if key == "" || strings.Contains(key, "/") {
+			ThrowHTTP(http.StatusBadRequest, "bad key")
+		}
+
+		data := runData{Key: key}
 		run := s.fetchRun(key)
 
 		data.StartedAt = run.StartedAt.UTC().Format("2006-01-02 15:04:05.000Z")
@@ -280,95 +297,68 @@ func (s *webSrv) handleRun(w http.ResponseWriter, r *http.Request) {
 		data.NumNodes = len(data.Nodes)
 
 		fillBrokenBy(data.Nodes, s.fetchGraph(key), run.Nodes)
+
+		var buf bytes.Buffer
+		Throw(runTmpl.Execute(&buf, data))
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		Throw2(w.Write(buf.Bytes()))
 	})
 
 	exc.Catch(func(e *Exception) {
-		data.Error = e.Error()
+		sendHTTPException(w, r, e)
 	})
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = runTmpl.Execute(w, data)
 }
 
 func (s *webSrv) handleNodeStream(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, "/node/")
-	parts := strings.Split(rest, "/")
+	exc := Try(func() {
+		rest := strings.TrimPrefix(r.URL.Path, "/node/")
+		parts := strings.Split(rest, "/")
 
-	if len(parts) != 2 || parts[0] == "" {
-		http.Error(w, "expected /node/<uid>/{stderr,stdout}", http.StatusBadRequest)
+		if len(parts) != 2 || parts[0] == "" {
+			ThrowHTTP(http.StatusBadRequest, "expected /node/<uid>/{stderr,stdout}")
+		}
 
-		return
-	}
+		uid, kind := parts[0], parts[1]
 
-	uid, kind := parts[0], parts[1]
+		if kind != "stderr" && kind != "stdout" {
+			ThrowHTTP(http.StatusBadRequest, "expected stderr or stdout")
+		}
 
-	if kind != "stderr" && kind != "stdout" {
-		http.Error(w, "expected stderr or stdout", http.StatusBadRequest)
+		url := fmt.Sprintf("%s/v1/tasks/%s/output?root=%s", strings.TrimRight(s.cfg.GornAPI, "/"), uid, s.cfg.S3Root)
 
-		return
-	}
+		req := Throw2(http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil))
+		resp := Throw2(s.http.Do(req))
+		defer resp.Body.Close()
 
-	url := fmt.Sprintf("%s/v1/tasks/%s/output?root=%s", strings.TrimRight(s.cfg.GornAPI, "/"), uid, s.cfg.S3Root)
+		body := Throw2(io.ReadAll(resp.Body))
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
+		if resp.StatusCode != http.StatusOK {
+			ThrowHTTP(http.StatusBadGateway, "gorn-control HTTP %d: %s", resp.StatusCode, body)
+		}
 
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		var out struct {
+			StdoutB64 string `json:"stdout_b64"`
+			StderrB64 string `json:"stderr_b64"`
+		}
 
-		return
-	}
+		Throw(json.Unmarshal(body, &out))
 
-	resp, err := s.http.Do(req)
+		enc := out.StderrB64
 
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		if kind == "stdout" {
+			enc = out.StdoutB64
+		}
 
-		return
-	}
+		dec := Throw2(base64.StdEncoding.DecodeString(enc))
 
-	defer resp.Body.Close()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		Throw2(w.Write(dec))
+	})
 
-	body, err := io.ReadAll(resp.Body)
-
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-
-		return
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, fmt.Sprintf("gorn-control HTTP %d: %s", resp.StatusCode, body), http.StatusBadGateway)
-
-		return
-	}
-
-	var out struct {
-		StdoutB64 string `json:"stdout_b64"`
-		StderrB64 string `json:"stderr_b64"`
-	}
-
-	if err := json.Unmarshal(body, &out); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-
-		return
-	}
-
-	enc := out.StderrB64
-
-	if kind == "stdout" {
-		enc = out.StdoutB64
-	}
-
-	dec, err := base64.StdEncoding.DecodeString(enc)
-
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = w.Write(dec)
+	exc.Catch(func(e *Exception) {
+		sendHTTPException(w, r, e)
+	})
 }
 
 // runStatus classifies a run for the index page coloring. EndedAt zero
