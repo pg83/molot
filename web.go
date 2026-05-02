@@ -130,12 +130,14 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 </html>`))
 
 type nodeRow struct {
-	UID        string
-	Out        string
-	StartedAt  string
-	Duration   string
-	Failed     bool
-	Cached     bool
+	UID       string
+	Out       string
+	StartedAt string
+	Duration  string
+	Failed    bool
+	Cached    bool
+	BrokenBy  string
+	Error     string
 }
 
 type runData struct {
@@ -165,16 +167,29 @@ var runTmpl = template.Must(template.New("run").Parse(`<!DOCTYPE html>
 
   <table class="table table-sm table-striped table-bordered bg-white">
     <thead class="table-dark">
-      <tr><th>uid</th><th>out</th><th>started</th><th>duration</th><th>status</th></tr>
+      <tr><th>uid</th><th>out</th><th>started</th><th>duration</th><th>status</th><th>error</th></tr>
     </thead>
     <tbody>
     {{range .Nodes}}
-      <tr class="{{if .Failed}}table-danger{{end}}">
+      <tr class="{{if .Failed}}{{if .BrokenBy}}table-warning{{else}}table-danger{{end}}{{end}}">
         <td><a href="/node/{{.UID}}/stderr"><code>{{.UID}}</code></a></td>
         <td><code>{{.Out}}</code></td>
         <td><small>{{.StartedAt}}</small></td>
         <td>{{.Duration}}</td>
-        <td>{{if .Failed}}<strong class="text-danger">failed</strong>{{else if .Cached}}<span class="text-secondary">cached</span>{{else}}ok{{end}}</td>
+        <td>
+          {{if .Failed}}
+            {{if .BrokenBy}}
+              <span class="text-warning">broken by</span> <a href="#{{.BrokenBy}}"><code>{{.BrokenBy}}</code></a>
+            {{else}}
+              <strong class="text-danger">failed</strong>
+            {{end}}
+          {{else if .Cached}}
+            <span class="text-secondary">cached</span>
+          {{else}}
+            ok
+          {{end}}
+        </td>
+        <td><small><code>{{.Error}}</code></small></td>
       </tr>
     {{end}}
     </tbody>
@@ -260,6 +275,8 @@ func (s *webSrv) handleRun(w http.ResponseWriter, r *http.Request) {
 				Duration:  n.FinishedAt.Sub(n.StartedAt).Truncate(time.Millisecond).String(),
 				Failed:    n.Failed,
 				Cached:    n.Cached,
+				BrokenBy:  n.BrokenBy,
+				Error:     n.Error,
 			}
 		}
 	})

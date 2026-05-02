@@ -75,31 +75,8 @@ func run() {
 	cfg := loadConfig(os.Args[1:])
 	g := readGraph(os.Stdin)
 
-	ledger := newLedger()
-	started := time.Now()
-
-	defer func() {
-		recs := ledger.Close()
-
-		run := Run{
-			StartedAt: started,
-			EndedAt:   time.Now(),
-			Targets:   g.Targets,
-			Nodes:     recs,
-		}
-
-		exc := Try(func() {
-			uploadLedger(cfg, run)
-		})
-
-		exc.Catch(func(e *Exception) {
-			fmt.Fprintln(os.Stderr, clr(clrY, "ledger upload: "+e.Error()))
-		})
-	}()
-
-	ex := newExecutor(g, cfg, ledger)
-
 	if cfg.UID != "" {
+		ex := newExecutor(g, cfg, nil)
 		n := findNode(g, cfg.UID)
 		fmt.Fprintln(os.Stderr, clr(clrB, fmt.Sprintf("--uid %s: dispatching single node, skipping dep traversal", cfg.UID)))
 		dispatchNode(ex, n)
@@ -108,7 +85,48 @@ func run() {
 		return
 	}
 
+	ledger := newLedger()
+	started := time.Now()
+
+	ex := newExecutor(g, cfg, ledger)
 	ex.visitAll(g.Targets)
+
+	recs := ledger.Close()
+
+	failed, broken := 0, 0
+
+	for _, r := range recs {
+		if !r.Failed {
+			continue
+		}
+
+		if r.BrokenBy != "" {
+			broken++
+		} else {
+			failed++
+		}
+	}
+
+	r := Run{
+		StartedAt: started,
+		EndedAt:   time.Now(),
+		Targets:   g.Targets,
+		Failed:    failed+broken > 0,
+		Nodes:     recs,
+	}
+
+	exc := Try(func() {
+		uploadLedger(cfg, r)
+	})
+
+	exc.Catch(func(e *Exception) {
+		fmt.Fprintln(os.Stderr, clr(clrY, "ledger upload: "+e.Error()))
+	})
+
+	if r.Failed {
+		fmt.Fprintln(os.Stderr, clr(clrR, fmt.Sprintf("molot: %d nodes failed, %d broken by dep — exit 2", failed, broken)))
+		os.Exit(2)
+	}
 }
 
 func findNode(g *Graph, uid string) *Node {
