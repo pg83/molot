@@ -74,12 +74,10 @@ type webSrv struct {
 type runRow struct {
 	Key       string
 	StartedAt string
-	Targets   string
-	Total     int
-	Failed    int
-	Cached    int
 	Duration  string
-	Errored   bool
+	Status    string
+	Failed    int
+	Total     int
 }
 
 type indexData struct {
@@ -108,20 +106,18 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 
   <table class="table table-sm table-striped table-bordered bg-white">
     <thead class="table-dark">
-      <tr><th>started</th><th>targets</th><th>nodes</th><th>cached</th><th>failed</th><th>duration</th></tr>
+      <tr><th>started</th><th>duration</th><th>status</th><th>failed / total</th></tr>
     </thead>
     <tbody>
     {{range .Runs}}
-      <tr class="{{if .Errored}}table-danger{{end}}">
+      <tr class="{{if eq .Status "running"}}table-info{{else if eq .Status "failed"}}table-danger{{else}}table-success{{end}}">
         <td><a href="/run/{{.Key}}"><code>{{.StartedAt}}</code></a></td>
-        <td><code>{{.Targets}}</code></td>
-        <td>{{.Total}}</td>
-        <td>{{.Cached}}</td>
-        <td>{{if .Failed}}<strong>{{.Failed}}</strong>{{else}}0{{end}}</td>
         <td>{{.Duration}}</td>
+        <td><strong>{{.Status}}</strong></td>
+        <td>{{if .Failed}}<strong>{{.Failed}}</strong> / {{.Total}}{{else}}— / {{.Total}}{{end}}</td>
       </tr>
     {{else}}
-      <tr><td colspan="6" class="text-muted">no runs in s3://{{$.Bucket}}/molot/{{$.Bucket}}/runs/ yet</td></tr>
+      <tr><td colspan="4" class="text-muted">no runs in s3://{{$.Bucket}}/molot/{{$.Bucket}}/runs/ yet</td></tr>
     {{end}}
     </tbody>
   </table>
@@ -217,19 +213,14 @@ func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
 			row := runRow{
 				Key:       k,
 				StartedAt: run.StartedAt.UTC().Format("2006-01-02 15:04:05Z"),
-				Targets:   strings.Join(run.Targets, " "),
 				Total:     len(run.Nodes),
-				Errored:   run.Failed,
-				Duration:  run.EndedAt.Sub(run.StartedAt).Truncate(time.Second).String(),
+				Status:    runStatus(run),
+				Duration:  runDuration(run).Truncate(time.Second).String(),
 			}
 
 			for _, n := range run.Nodes {
 				if n.Failed {
 					row.Failed++
-				}
-
-				if n.Cached {
-					row.Cached++
 				}
 			}
 
@@ -260,20 +251,29 @@ func (s *webSrv) handleRun(w http.ResponseWriter, r *http.Request) {
 		run := s.fetchRun(key)
 
 		data.StartedAt = run.StartedAt.UTC().Format("2006-01-02 15:04:05.000Z")
-		data.EndedAt = run.EndedAt.UTC().Format("2006-01-02 15:04:05.000Z")
+
+		if !run.EndedAt.IsZero() {
+			data.EndedAt = run.EndedAt.UTC().Format("2006-01-02 15:04:05.000Z")
+		} else {
+			data.EndedAt = "(running)"
+		}
+
 		data.Targets = strings.Join(run.Targets, " ")
 		data.Failed = run.Failed
-		data.Nodes = make([]nodeRow, len(run.Nodes))
 
-		for i, n := range run.Nodes {
-			data.Nodes[i] = nodeRow{
+		for _, n := range run.Nodes {
+			if !n.Failed {
+				continue
+			}
+
+			data.Nodes = append(data.Nodes, nodeRow{
 				UID:       n.UID,
 				Out:       n.Out,
 				StartedAt: n.StartedAt.UTC().Format("15:04:05.000"),
 				Duration:  n.FinishedAt.Sub(n.StartedAt).Truncate(time.Millisecond).String(),
 				Failed:    n.Failed,
 				Cached:    n.Cached,
-			}
+			})
 		}
 
 		fillBrokenBy(data.Nodes, run.Graph, run.Nodes)
@@ -366,6 +366,31 @@ func (s *webSrv) handleNodeStream(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write(dec)
+}
+
+// runStatus classifies a run for the index page coloring. EndedAt zero
+// means the start-of-run marker was uploaded but no final upload landed
+// yet — molot is still executing or crashed mid-run; the row stays blue
+// (info) until it converges. After EndedAt is set, Failed picks
+// success/failure.
+func runStatus(r Run) string {
+	if r.EndedAt.IsZero() {
+		return "running"
+	}
+
+	if r.Failed {
+		return "failed"
+	}
+
+	return "ok"
+}
+
+func runDuration(r Run) time.Duration {
+	if r.EndedAt.IsZero() {
+		return time.Now().UTC().Sub(r.StartedAt)
+	}
+
+	return r.EndedAt.Sub(r.StartedAt)
 }
 
 // fillBrokenBy walks the stored Graph to find, for each Failed nodeRow,

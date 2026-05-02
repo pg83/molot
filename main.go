@@ -88,6 +88,14 @@ func run() {
 	ledger := newLedger()
 	started := time.Now()
 
+	exc := Try(func() {
+		uploadLedger(cfg, Run{StartedAt: started, Targets: g.Targets})
+	})
+
+	exc.Catch(func(e *Exception) {
+		fmt.Fprintln(os.Stderr, clr(clrY, "ledger initial upload: "+e.Error()))
+	})
+
 	ex := newExecutor(g, cfg, ledger)
 	ex.visitAll(g.Targets)
 
@@ -110,7 +118,7 @@ func run() {
 		Graph:     g,
 	}
 
-	exc := Try(func() {
+	exc = Try(func() {
 		uploadLedger(cfg, r)
 	})
 
