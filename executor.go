@@ -26,7 +26,6 @@ type Executor struct {
 	done    atomic.Uint64
 	total   atomic.Uint64
 	ledger  *Ledger
-	started time.Time
 }
 
 func newExecutor(g *Graph, cfg *Config, ledger *Ledger) *Executor {
@@ -37,7 +36,6 @@ func newExecutor(g *Graph, cfg *Config, ledger *Ledger) *Executor {
 		byOut:   map[string]*Node{},
 		futures: map[string]*future{},
 		ledger:  ledger,
-		started: time.Now(),
 	}
 
 	for i := range g.Nodes {
@@ -94,7 +92,6 @@ func (ex *Executor) visitAll(outs []string) {
 
 			exc.Catch(func(e *Exception) {
 				fmt.Fprintln(os.Stderr, clr(clrR, "node failed: "+e.Error()))
-				ex.flushOnFailure()
 				os.Exit(2)
 			})
 		}()
@@ -158,32 +155,6 @@ func (ex *Executor) executeNode(n *Node) {
 	ex.done.Add(1)
 
 	fmt.Fprintln(os.Stderr, clr(clrG, ex.progress()+" LEAVE "+out))
-}
-
-// flushOnFailure snapshots the ledger and uploads it before the process
-// exits via os.Exit(2) — defers don't run on os.Exit, so the success-path
-// upload in main.run() is bypassed on failure. Called from visitAll's
-// per-goroutine Catch.
-func (ex *Executor) flushOnFailure() {
-	if ex.ledger == nil {
-		return
-	}
-
-	run := Run{
-		StartedAt: ex.started,
-		EndedAt:   time.Now(),
-		Targets:   ex.g.Targets,
-		Failed:    true,
-		Nodes:     ex.ledger.Snapshot(),
-	}
-
-	exc := Try(func() {
-		uploadLedger(ex.cfg, run)
-	})
-
-	exc.Catch(func(e *Exception) {
-		fmt.Fprintln(os.Stderr, clr(clrY, "ledger upload (failure path): "+e.Error()))
-	})
 }
 
 // progress returns "{done+1/visited}" — the count of visited nodes so

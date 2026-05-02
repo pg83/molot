@@ -27,43 +27,28 @@ type Run struct {
 }
 
 // Ledger is a single-writer accumulator of NodeRec events. The collector
-// goroutine owns the slice; Add sends events through ch, Snapshot copies
-// the current state out via a reply channel, Close stops accepting new
-// events and returns the final slice. No mutex — every read/write to
-// recs happens inside the collector.
+// goroutine owns the slice; Add sends events through ch, Close stops
+// accepting new events and returns the final slice. No mutex — every
+// read/write to recs happens inside the collector.
 type Ledger struct {
 	ch     chan NodeRec
-	snap   chan chan []NodeRec
 	closed chan []NodeRec
 }
 
 func newLedger() *Ledger {
 	l := &Ledger{
 		ch:     make(chan NodeRec, 256),
-		snap:   make(chan chan []NodeRec),
 		closed: make(chan []NodeRec, 1),
 	}
 
 	go func() {
 		var recs []NodeRec
 
-		for {
-			select {
-			case r, ok := <-l.ch:
-				if !ok {
-					l.closed <- recs
-
-					return
-				}
-
-				recs = append(recs, r)
-			case reply := <-l.snap:
-				cp := make([]NodeRec, len(recs))
-				copy(cp, recs)
-
-				reply <- cp
-			}
+		for r := range l.ch {
+			recs = append(recs, r)
 		}
+
+		l.closed <- recs
 	}()
 
 	return l
@@ -71,13 +56,6 @@ func newLedger() *Ledger {
 
 func (l *Ledger) Add(r NodeRec) {
 	l.ch <- r
-}
-
-func (l *Ledger) Snapshot() []NodeRec {
-	reply := make(chan []NodeRec, 1)
-	l.snap <- reply
-
-	return <-reply
 }
 
 func (l *Ledger) Close() []NodeRec {

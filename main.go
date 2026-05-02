@@ -98,7 +98,6 @@ func run() {
 	}()
 
 	ex := newExecutor(g, cfg, ledger)
-	ex.started = started
 
 	if cfg.UID != "" {
 		n := findNode(g, cfg.UID)
