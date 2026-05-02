@@ -136,13 +136,14 @@ type nodeRow struct {
 }
 
 type runData struct {
-	Key       string
-	StartedAt string
-	EndedAt   string
-	Targets   string
-	Failed    bool
-	Nodes     []nodeRow
-	Error     string
+	Key        string
+	StartedAt  string
+	EndedAt    string
+	Failed     bool
+	Nodes      []nodeRow
+	NumNodes   int
+	TotalNodes int
+	Error      string
 }
 
 var runTmpl = template.Must(template.New("run").Parse(`<!DOCTYPE html>
@@ -156,7 +157,7 @@ var runTmpl = template.Must(template.New("run").Parse(`<!DOCTYPE html>
 <div class="container-fluid py-4">
   <a href="/" class="text-decoration-none">&larr; runs</a>
   <h1 class="mt-2">run {{.StartedAt}} {{if .Failed}}<span class="badge bg-danger">failed</span>{{end}}</h1>
-  <p class="text-muted">targets: <code>{{.Targets}}</code> · ended: <code>{{.EndedAt}}</code></p>
+  <p class="text-muted">ended: <code>{{.EndedAt}}</code> · {{.NumNodes}} failed nodes (out of {{.TotalNodes}} total)</p>
 
   {{if .Error}}<div class="alert alert-danger"><code>{{.Error}}</code></div>{{end}}
 
@@ -207,6 +208,8 @@ func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
 	exc := Try(func() {
 		keys := s.listRuns()
 
+		var running, completed []runRow
+
 		for _, k := range keys {
 			run := s.fetchRun(k)
 
@@ -224,8 +227,14 @@ func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			data.Runs = append(data.Runs, row)
+			if row.Status == "running" {
+				running = append(running, row)
+			} else {
+				completed = append(completed, row)
+			}
 		}
+
+		data.Runs = append(running, completed...)
 	})
 
 	exc.Catch(func(e *Exception) {
@@ -258,8 +267,8 @@ func (s *webSrv) handleRun(w http.ResponseWriter, r *http.Request) {
 			data.EndedAt = "(running)"
 		}
 
-		data.Targets = strings.Join(run.Targets, " ")
 		data.Failed = run.Failed
+		data.TotalNodes = len(run.Nodes)
 
 		for _, n := range run.Nodes {
 			if !n.Failed {
@@ -275,6 +284,8 @@ func (s *webSrv) handleRun(w http.ResponseWriter, r *http.Request) {
 				Cached:    n.Cached,
 			})
 		}
+
+		data.NumNodes = len(data.Nodes)
 
 		fillBrokenBy(data.Nodes, run.Graph, run.Nodes)
 	})
