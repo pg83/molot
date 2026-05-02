@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"sort"
 	"strings"
@@ -440,45 +439,21 @@ func fillBrokenBy(rows []nodeRow, g *Graph, recs []NodeRec) {
 	}
 }
 
-// listRuns returns the most-recent N run keys, sorted newest-first. ISO
-// keys lex-sort chronologically, so reverse sort gives newest first.
+// listRuns returns the most-recent N run keys, newest-first. ISO keys
+// lex-sort chronologically, so reverse sort gives newest first. Keys
+// returned without the "runs/" prefix or ".json" suffix — bare ts.
 func (s *webSrv) listRuns() []string {
 	const limit = 200
 
-	mcCfg := Throw2(os.MkdirTemp(".", "mc-listruns-"))
-	defer os.RemoveAll(mcCfg)
-
-	cmd := exec.Command("minio-client", "--config-dir", mcCfg, "ls", "--json", fmt.Sprintf("molot/%s/runs/", s.cfg.S3Bucket))
-	cmd.Env = append(os.Environ(), "MC_HOST_molot="+s.cfg.MCHost)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		ThrowFmt("mc ls runs: %v\n%s", err, stderr.String())
-	}
+	full := s3ListKeys(context.Background(), s.cfg.S3Cli, s.cfg.S3Bucket, "runs/")
 
 	var keys []string
 
-	for _, line := range strings.Split(stdout.String(), "\n") {
-		line = strings.TrimSpace(line)
+	for _, k := range full {
+		k = strings.TrimPrefix(k, "runs/")
+		k = strings.TrimSuffix(k, ".json")
 
-		if line == "" {
-			continue
-		}
-
-		var rec struct {
-			Key string `json:"key"`
-		}
-
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			continue
-		}
-
-		k := strings.TrimSuffix(rec.Key, ".json")
-
-		if k == "" || strings.HasSuffix(rec.Key, "/") {
+		if k == "" {
 			continue
 		}
 
@@ -496,32 +471,14 @@ func (s *webSrv) listRuns() []string {
 
 func (s *webSrv) fetchRun(key string) Run {
 	var run Run
-	s.fetchJSON(fmt.Sprintf("molot/%s/runs/%s.json", s.cfg.S3Bucket, key), &run)
+	s3GetJSON(context.Background(), s.cfg.S3Cli, s.cfg.S3Bucket, "runs/"+key+".json", &run)
 
 	return run
 }
 
 func (s *webSrv) fetchGraph(key string) *Graph {
 	g := &Graph{}
-	s.fetchJSON(fmt.Sprintf("molot/%s/graphs/%s.json", s.cfg.S3Bucket, key), g)
+	s3GetJSON(context.Background(), s.cfg.S3Cli, s.cfg.S3Bucket, "graphs/"+key+".json", g)
 
 	return g
-}
-
-func (s *webSrv) fetchJSON(mcPath string, out any) {
-	mcCfg := Throw2(os.MkdirTemp(".", "mc-fetch-"))
-	defer os.RemoveAll(mcCfg)
-
-	cmd := exec.Command("minio-client", "--config-dir", mcCfg, "cat", mcPath)
-	cmd.Env = append(os.Environ(), "MC_HOST_molot="+s.cfg.MCHost)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		ThrowFmt("mc cat %s: %v\n%s", mcPath, err, stderr.String())
-	}
-
-	Throw(json.Unmarshal(stdout.Bytes(), out))
 }

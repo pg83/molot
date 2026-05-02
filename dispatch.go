@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
@@ -169,31 +170,14 @@ func dispatchNode(ex *Executor, n *Node) {
 // to pull the missing dep, hundreds of lines away from the real cause.
 // Failing here, on the producer itself, makes the root cause obvious.
 func verifyResult(ex *Executor, n *Node) {
-	key := ex.cfg.ResultKey(n.UID)
+	key := ex.cfg.ResultObjectKey(n.UID)
 
-	// mc insists on creating $HOME/.mc even when the alias comes from
-	// MC_HOST_*. The ci_<n> user has no writable HOME, no /tmp under
-	// stal-ix, and TMPDIR under the CI runit service is the root-owned
-	// log dir. The reliably-writable spot is cwd — ci_cycle chdirs
-	// into /var/run/ci_<n>/ix/ before execing molot.
-	mcCfg := Throw2(os.MkdirTemp(".", "mc-molot-"))
-	defer os.RemoveAll(mcCfg)
-
-	cmd := exec.Command("minio-client", "--config-dir", mcCfg, "stat", "--json", key)
-	cmd.Env = append(os.Environ(), "MC_HOST_molot="+ex.cfg.MCHost)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-
-	if err == nil {
+	if s3StatExists(context.Background(), ex.cfg.S3Cli, ex.cfg.S3Bucket, key) {
 		return
 	}
 
-	ThrowFmt("node %s (out=%s): gorn reported success but result.zstd is missing at %s (minio-client stat: %v)\nstdout: %s\nstderr: %s",
-		n.UID, n.OutDirs[0], key, err, stdout.String(), stderr.String())
+	ThrowFmt("node %s (out=%s): gorn reported success but result.zstd is missing at s3://%s/%s",
+		n.UID, n.OutDirs[0], ex.cfg.S3Bucket, key)
 }
 
 func buildWrapScript(ex *Executor, n *Node) string {

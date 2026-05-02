@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
+	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"time"
 )
 
@@ -64,16 +61,16 @@ func (l *Ledger) Close() []NodeRec {
 	return <-l.closed
 }
 
-// runKey returns the S3 key for a Run manifest. ISO8601 with milliseconds
-// in UTC: lex-sort matches chronological order, mc ls is human-readable,
-// no UUID needed (collisions inside one millisecond ignored — molot
-// invocations don't fire at sub-ms cadence).
-func runKey(bucket string, started time.Time) string {
-	return fmt.Sprintf("molot/%s/runs/%s.json", bucket, tsFmt(started))
+// runKey / graphKey return in-bucket keys for the Run manifest and the
+// full Graph blob. ISO8601 with milliseconds: lex-sort matches
+// chronological order, listing is human-readable, no UUID needed —
+// molot invocations don't fire at sub-ms cadence.
+func runKey(started time.Time) string {
+	return fmt.Sprintf("runs/%s.json", tsFmt(started))
 }
 
-func graphKey(bucket string, started time.Time) string {
-	return fmt.Sprintf("molot/%s/graphs/%s.json", bucket, tsFmt(started))
+func graphKey(started time.Time) string {
+	return fmt.Sprintf("graphs/%s.json", tsFmt(started))
 }
 
 func tsFmt(t time.Time) string {
@@ -81,32 +78,9 @@ func tsFmt(t time.Time) string {
 }
 
 func uploadLedger(cfg *Config, run Run) {
-	uploadJSON(cfg, runKey(cfg.S3Bucket, run.StartedAt), run, "ledger")
+	s3PutJSON(context.Background(), cfg.S3Cli, cfg.S3Bucket, runKey(run.StartedAt), run)
 }
 
 func uploadGraph(cfg *Config, started time.Time, g *Graph) {
-	uploadJSON(cfg, graphKey(cfg.S3Bucket, started), g, "graph")
-}
-
-func uploadJSON(cfg *Config, key string, body any, label string) {
-	data := Throw2(json.MarshalIndent(body, "", "  "))
-
-	f := Throw2(os.CreateTemp(".", "molot-"+label+"-*.json"))
-	defer os.Remove(f.Name())
-
-	Throw2(f.Write(data))
-	Throw(f.Close())
-
-	mcCfg := Throw2(os.MkdirTemp(".", "mc-"+label+"-"))
-	defer os.RemoveAll(mcCfg)
-
-	cmd := exec.Command("minio-client", "--config-dir", mcCfg, "cp", f.Name(), key)
-	cmd.Env = append(os.Environ(), "MC_HOST_molot="+cfg.MCHost)
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		ThrowFmt("%s upload: %v\n%s", label, err, stderr.String())
-	}
+	s3PutJSON(context.Background(), cfg.S3Cli, cfg.S3Bucket, graphKey(started), g)
 }

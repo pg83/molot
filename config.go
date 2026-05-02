@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 func setFromFlagInt(fs *flag.FlagSet, name string, a, b int) int {
@@ -49,16 +51,15 @@ type Config struct {
 	CacheFile string `json:"cache_file,omitempty"`
 	Dump      bool   `json:"dump,omitempty"`
 	Quiet     bool   `json:"quiet,omitempty"`
-	UID       string `json:"-"` // not meaningful in a config file; runtime-only
-	MCHost    string `json:"-"` // computed in validate(): "<scheme>://<key>:<secret>@<host>"
+	UID       string     `json:"-"` // not meaningful in a config file; runtime-only
+	S3Cli     *s3.Client `json:"-"` // initialized in validate()
 }
 
-// ResultKey returns the S3 key (mc alias form) for a node's result.zstd.
-// Same shape the wrap script uploads to via selfS3 and pulls deps from via
-// depS3, kept in one place so rendering (shell) and checking (Go) can't
-// drift.
-func (c *Config) ResultKey(uid string) string {
-	return fmt.Sprintf("molot/%s/%s/%s/result.zstd", c.S3Bucket, c.S3Root, uid)
+// ResultObjectKey returns the in-bucket key (no alias / bucket prefix)
+// for a node's result.zstd. Matches the layout the wrap.sh template
+// uploads to via selfS3 / pulls deps from via depS3.
+func (c *Config) ResultObjectKey(uid string) string {
+	return fmt.Sprintf("%s/%s/result.zstd", c.S3Root, uid)
 }
 
 type cliOpts struct {
@@ -262,11 +263,9 @@ func validate(c *Config) {
 		ThrowFmt("AWS_ACCESS_KEY_ID / --aws-key and AWS_SECRET_ACCESS_KEY / --aws-secret are required")
 	}
 
-	scheme, host, ok := strings.Cut(c.S3Endpt, "://")
-
-	if !ok {
+	if _, _, ok := strings.Cut(c.S3Endpt, "://"); !ok {
 		ThrowFmt("S3_ENDPOINT missing scheme (expected http://... or https://...): %q", c.S3Endpt)
 	}
 
-	c.MCHost = fmt.Sprintf("%s://%s:%s@%s", scheme, c.AWSKey, c.AWSSecret, host)
+	c.S3Cli = newS3Client(c)
 }

@@ -88,7 +88,7 @@ func run() {
 	ledger := newLedger()
 	started := time.Now()
 
-	fmt.Fprintln(os.Stderr, "molot: started, ledger key="+runKey(cfg.S3Bucket, started))
+	fmt.Fprintln(os.Stderr, "molot: started, ledger key=s3://"+cfg.S3Bucket+"/"+runKey(started))
 
 	exc := Try(func() {
 		uploadLedger(cfg, Run{StartedAt: started, Targets: g.Targets})
