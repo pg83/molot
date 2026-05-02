@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 )
 
 const header = `usage: molot [flags] < graph.json
@@ -35,9 +36,16 @@ func main() {
 	// `molot hash` — print the uid-seed that IX's ops_molot.py mixes
 	// into every uid. Any change to wrap.sh.tmpl shifts the hash, so
 	// every uid naturally invalidates when the wrap logic changes.
-	if len(os.Args) == 2 && os.Args[1] == "hash" {
-		fmt.Println(tmplHash)
-		os.Exit(0)
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "hash":
+			fmt.Println(tmplHash)
+			os.Exit(0)
+		case "web":
+			runSubcommand(func() { webMain(os.Args[2:]) })
+
+			return
+		}
 	}
 
 	for _, a := range os.Args[1:] {
@@ -51,9 +59,11 @@ func main() {
 		}
 	}
 
-	exc := Try(func() {
-		run()
-	})
+	runSubcommand(run)
+}
+
+func runSubcommand(fn func()) {
+	exc := Try(fn)
 
 	exc.Catch(func(e *Exception) {
 		fmt.Fprintln(os.Stderr, clr(clrR, "abort: "+e.Error()))
@@ -64,7 +74,31 @@ func main() {
 func run() {
 	cfg := loadConfig(os.Args[1:])
 	g := readGraph(os.Stdin)
-	ex := newExecutor(g, cfg)
+
+	ledger := newLedger()
+	started := time.Now()
+
+	defer func() {
+		recs := ledger.Close()
+
+		run := Run{
+			StartedAt: started,
+			EndedAt:   time.Now(),
+			Targets:   g.Targets,
+			Nodes:     recs,
+		}
+
+		exc := Try(func() {
+			uploadLedger(cfg, run)
+		})
+
+		exc.Catch(func(e *Exception) {
+			fmt.Fprintln(os.Stderr, clr(clrY, "ledger upload: "+e.Error()))
+		})
+	}()
+
+	ex := newExecutor(g, cfg, ledger)
+	ex.started = started
 
 	if cfg.UID != "" {
 		n := findNode(g, cfg.UID)
