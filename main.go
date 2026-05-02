@@ -107,6 +107,7 @@ func run() {
 		Targets:   g.Targets,
 		Failed:    failed > 0,
 		Nodes:     recs,
+		Graph:     g,
 	}
 
 	exc := Try(func() {

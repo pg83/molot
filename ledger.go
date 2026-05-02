@@ -24,6 +24,7 @@ type Run struct {
 	Targets   []string  `json:"targets"`
 	Failed    bool      `json:"failed,omitempty"`
 	Nodes     []NodeRec `json:"nodes"`
+	Graph     *Graph    `json:"graph,omitempty"`
 }
 
 // Ledger is a single-writer accumulator of NodeRec events. The collector

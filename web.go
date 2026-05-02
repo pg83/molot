@@ -136,6 +136,7 @@ type nodeRow struct {
 	Duration  string
 	Failed    bool
 	Cached    bool
+	BrokenBy  string
 }
 
 type runData struct {
@@ -169,12 +170,24 @@ var runTmpl = template.Must(template.New("run").Parse(`<!DOCTYPE html>
     </thead>
     <tbody>
     {{range .Nodes}}
-      <tr class="{{if .Failed}}table-danger{{end}}">
+      <tr id="{{.UID}}" class="{{if .Failed}}{{if .BrokenBy}}table-warning{{else}}table-danger{{end}}{{end}}">
         <td><a href="/node/{{.UID}}/stderr"><code>{{.UID}}</code></a></td>
         <td><code>{{.Out}}</code></td>
         <td><small>{{.StartedAt}}</small></td>
         <td>{{.Duration}}</td>
-        <td>{{if .Failed}}<strong class="text-danger">failed</strong>{{else if .Cached}}<span class="text-secondary">cached</span>{{else}}ok{{end}}</td>
+        <td>
+          {{if .Failed}}
+            {{if .BrokenBy}}
+              <span class="text-warning">broken by</span> <a href="#{{.BrokenBy}}"><code>{{.BrokenBy}}</code></a>
+            {{else}}
+              <strong class="text-danger">failed</strong>
+            {{end}}
+          {{else if .Cached}}
+            <span class="text-secondary">cached</span>
+          {{else}}
+            ok
+          {{end}}
+        </td>
       </tr>
     {{end}}
     </tbody>
@@ -262,6 +275,8 @@ func (s *webSrv) handleRun(w http.ResponseWriter, r *http.Request) {
 				Cached:    n.Cached,
 			}
 		}
+
+		fillBrokenBy(data.Nodes, run.Graph, run.Nodes)
 	})
 
 	exc.Catch(func(e *Exception) {
@@ -351,6 +366,60 @@ func (s *webSrv) handleNodeStream(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write(dec)
+}
+
+// fillBrokenBy walks the stored Graph to find, for each Failed nodeRow,
+// the first dep (by InDirs order) that's also Failed in the same run.
+// "broken by dep" is a derived view: the manifest stores only Failed bool
+// per node, the dep chain comes from the Graph.
+func fillBrokenBy(rows []nodeRow, g *Graph, recs []NodeRec) {
+	if g == nil {
+		return
+	}
+
+	failed := map[string]bool{}
+
+	for _, r := range recs {
+		if r.Failed {
+			failed[r.UID] = true
+		}
+	}
+
+	uidByOut := map[string]string{}
+
+	for _, n := range g.Nodes {
+		for _, od := range n.OutDirs {
+			uidByOut[od+"/touch"] = n.UID
+		}
+	}
+
+	nodeByUID := map[string]*Node{}
+
+	for i := range g.Nodes {
+		nodeByUID[g.Nodes[i].UID] = &g.Nodes[i]
+	}
+
+	for i := range rows {
+		if !rows[i].Failed {
+			continue
+		}
+
+		gn := nodeByUID[rows[i].UID]
+
+		if gn == nil {
+			continue
+		}
+
+		for _, in := range gn.InDirs {
+			depUID := uidByOut[in+"/touch"]
+
+			if depUID != "" && failed[depUID] {
+				rows[i].BrokenBy = depUID
+
+				break
+			}
+		}
+	}
 }
 
 // listRuns returns the most-recent N run keys, sorted newest-first. ISO
