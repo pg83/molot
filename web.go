@@ -208,8 +208,6 @@ func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
 	exc := Try(func() {
 		keys := s.listRuns()
 
-		var running, completed []runRow
-
 		for _, k := range keys {
 			run := s.fetchRun(k)
 
@@ -227,14 +225,8 @@ func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			if row.Status == "running" {
-				running = append(running, row)
-			} else {
-				completed = append(completed, row)
-			}
+			data.Runs = append(data.Runs, row)
 		}
-
-		data.Runs = append(running, completed...)
 	})
 
 	exc.Catch(func(e *Exception) {
@@ -287,7 +279,7 @@ func (s *webSrv) handleRun(w http.ResponseWriter, r *http.Request) {
 
 		data.NumNodes = len(data.Nodes)
 
-		fillBrokenBy(data.Nodes, run.Graph, run.Nodes)
+		fillBrokenBy(data.Nodes, s.fetchGraph(key), run.Nodes)
 	})
 
 	exc.Catch(func(e *Exception) {
@@ -513,10 +505,24 @@ func (s *webSrv) listRuns() []string {
 }
 
 func (s *webSrv) fetchRun(key string) Run {
-	mcCfg := Throw2(os.MkdirTemp(".", "mc-fetchrun-"))
+	var run Run
+	s.fetchJSON(fmt.Sprintf("molot/%s/runs/%s.json", s.cfg.S3Bucket, key), &run)
+
+	return run
+}
+
+func (s *webSrv) fetchGraph(key string) *Graph {
+	g := &Graph{}
+	s.fetchJSON(fmt.Sprintf("molot/%s/graphs/%s.json", s.cfg.S3Bucket, key), g)
+
+	return g
+}
+
+func (s *webSrv) fetchJSON(mcPath string, out any) {
+	mcCfg := Throw2(os.MkdirTemp(".", "mc-fetch-"))
 	defer os.RemoveAll(mcCfg)
 
-	cmd := exec.Command("minio-client", "--config-dir", mcCfg, "cat", fmt.Sprintf("molot/%s/runs/%s.json", s.cfg.S3Bucket, key))
+	cmd := exec.Command("minio-client", "--config-dir", mcCfg, "cat", mcPath)
 	cmd.Env = append(os.Environ(), "MC_HOST_molot="+s.cfg.MCHost)
 
 	var stdout, stderr bytes.Buffer
@@ -524,11 +530,8 @@ func (s *webSrv) fetchRun(key string) Run {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		ThrowFmt("mc cat %s: %v\n%s", key, err, stderr.String())
+		ThrowFmt("mc cat %s: %v\n%s", mcPath, err, stderr.String())
 	}
 
-	var run Run
-	Throw(json.Unmarshal(stdout.Bytes(), &run))
-
-	return run
+	Throw(json.Unmarshal(stdout.Bytes(), out))
 }

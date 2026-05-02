@@ -24,7 +24,6 @@ type Run struct {
 	Targets   []string  `json:"targets"`
 	Failed    bool      `json:"failed,omitempty"`
 	Nodes     []NodeRec `json:"nodes"`
-	Graph     *Graph    `json:"graph,omitempty"`
 }
 
 // Ledger is a single-writer accumulator of NodeRec events. The collector
@@ -70,30 +69,44 @@ func (l *Ledger) Close() []NodeRec {
 // no UUID needed (collisions inside one millisecond ignored — molot
 // invocations don't fire at sub-ms cadence).
 func runKey(bucket string, started time.Time) string {
-	ts := started.UTC().Format("2006-01-02T15-04-05.000Z")
+	return fmt.Sprintf("molot/%s/runs/%s.json", bucket, tsFmt(started))
+}
 
-	return fmt.Sprintf("molot/%s/runs/%s.json", bucket, ts)
+func graphKey(bucket string, started time.Time) string {
+	return fmt.Sprintf("molot/%s/graphs/%s.json", bucket, tsFmt(started))
+}
+
+func tsFmt(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15-04-05.000Z")
 }
 
 func uploadLedger(cfg *Config, run Run) {
-	data := Throw2(json.MarshalIndent(run, "", "  "))
+	uploadJSON(cfg, runKey(cfg.S3Bucket, run.StartedAt), run, "ledger")
+}
 
-	f := Throw2(os.CreateTemp(".", "molot-ledger-*.json"))
+func uploadGraph(cfg *Config, started time.Time, g *Graph) {
+	uploadJSON(cfg, graphKey(cfg.S3Bucket, started), g, "graph")
+}
+
+func uploadJSON(cfg *Config, key string, body any, label string) {
+	data := Throw2(json.MarshalIndent(body, "", "  "))
+
+	f := Throw2(os.CreateTemp(".", "molot-"+label+"-*.json"))
 	defer os.Remove(f.Name())
 
 	Throw2(f.Write(data))
 	Throw(f.Close())
 
-	mcCfg := Throw2(os.MkdirTemp(".", "mc-ledger-"))
+	mcCfg := Throw2(os.MkdirTemp(".", "mc-"+label+"-"))
 	defer os.RemoveAll(mcCfg)
 
-	cmd := exec.Command("minio-client", "--config-dir", mcCfg, "cp", f.Name(), runKey(cfg.S3Bucket, run.StartedAt))
+	cmd := exec.Command("minio-client", "--config-dir", mcCfg, "cp", f.Name(), key)
 	cmd.Env = append(os.Environ(), "MC_HOST_molot="+cfg.MCHost)
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		ThrowFmt("ledger upload: %v\n%s", err, stderr.String())
+		ThrowFmt("%s upload: %v\n%s", label, err, stderr.String())
 	}
 }

@@ -98,6 +98,14 @@ func run() {
 		fmt.Fprintln(os.Stderr, clr(clrY, "ledger initial upload: "+e.Error()))
 	})
 
+	exc = Try(func() {
+		uploadGraph(cfg, started, g)
+	})
+
+	exc.Catch(func(e *Exception) {
+		fmt.Fprintln(os.Stderr, clr(clrY, "graph upload: "+e.Error()))
+	})
+
 	ex := newExecutor(g, cfg, ledger)
 	ex.visitAll(g.Targets)
 
@@ -117,7 +125,6 @@ func run() {
 		Targets:   g.Targets,
 		Failed:    failed > 0,
 		Nodes:     recs,
-		Graph:     g,
 	}
 
 	exc = Try(func() {
