@@ -284,7 +284,7 @@ func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
 		// within 3*heartbeat. Fetching only the freshly-modified subset
 		// drops the per-page-load GET count from ~50 to typically 0–5.
 		cutoff := time.Now().Add(-3 * HeartbeatPeriod)
-		entries := s.listRuns("", 1000)
+		entries := s.listRuns("", 200)
 
 		for _, e := range entries {
 			if e.LastModified.Before(cutoff) {
