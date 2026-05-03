@@ -277,17 +277,26 @@ func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
 			Bucket: s.cfg.S3Bucket,
 		}
 
-		// In-flight runs (no EndedAt) live at the head of the list since
-		// keys are timestamps. 50 newest is plenty — anything older with
-		// no EndedAt is "stuck" and belongs in /archive, not here.
-		entries := s.listRuns("", 50)
+		// Running heartbeat re-uploads runs/<key>.json every
+		// HeartbeatPeriod, so a running run's S3 LastModified is always
+		// fresh. Filter on that BEFORE fetching JSONs — the LIST already
+		// has LastModified, and ended/stuck runs lose their fresh window
+		// within 3*heartbeat. Fetching only the freshly-modified subset
+		// drops the per-page-load GET count from ~50 to typically 0–5.
+		cutoff := time.Now().Add(-3 * HeartbeatPeriod)
+		entries := s.listRuns("", 1000)
 
 		for _, e := range entries {
+			if e.LastModified.Before(cutoff) {
+				continue
+			}
+
 			run := s.fetchRun(e.Key)
 
-			status := runStatus(run, e.LastModified)
-
-			if status != "running" {
+			// LastModified being fresh means either still running or
+			// ended-within-the-last-90s; the EndedAt check filters out
+			// the latter.
+			if !run.EndedAt.IsZero() {
 				continue
 			}
 
@@ -295,7 +304,7 @@ func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
 				Key:       e.Key,
 				StartedAt: run.StartedAt.UTC().Format("2006-01-02 15:04:05Z"),
 				Total:     len(run.Nodes),
-				Status:    status,
+				Status:    "running",
 				Duration:  runDuration(run).Truncate(time.Second).String(),
 			}
 
