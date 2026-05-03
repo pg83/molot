@@ -63,6 +63,7 @@ func webMain(args []string) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", srv.handleIndex)
+	mux.HandleFunc("/archive", srv.handleArchive)
 	mux.HandleFunc("/run/", srv.handleRun)
 	mux.HandleFunc("/node/", srv.handleNodeStream)
 
@@ -115,14 +116,62 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta http-equiv="refresh" content="5">
-<title>molot runs</title>
+<title>molot runs (running)</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body class="bg-light">
 <div class="container-fluid py-4">
   <div class="d-flex justify-content-between align-items-baseline mb-3">
-    <h1 class="mb-0">molot runs</h1>
-    <small class="text-muted">refresh 5s · {{.Now}} · bucket {{.Bucket}}</small>
+    <h1 class="mb-0">molot runs (running)</h1>
+    <small class="text-muted">
+      refresh 5s · {{.Now}} · bucket {{.Bucket}} ·
+      <a href="/archive">archive &rarr;</a>
+    </small>
+  </div>
+
+  <table class="table table-sm table-striped table-bordered bg-white">
+    <thead class="table-dark">
+      <tr><th>started</th><th>duration</th><th>status</th><th>failed / total</th></tr>
+    </thead>
+    <tbody>
+    {{range .Runs}}
+      <tr class="table-info">
+        <td><a href="/run/{{.Key}}"><code>{{.StartedAt}}</code></a></td>
+        <td>{{.Duration}}</td>
+        <td><strong>{{.Status}}</strong></td>
+        <td>{{if .Failed}}<strong>{{.Failed}}</strong> / {{.Total}}{{else}}— / {{.Total}}{{end}}</td>
+      </tr>
+    {{else}}
+      <tr><td colspan="4" class="text-muted">no running runs — see <a href="/archive">archive</a></td></tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+</body>
+</html>`))
+
+type archiveData struct {
+	Runs       []runRow
+	Now        string
+	Bucket     string
+	NextBefore string
+	HasNext    bool
+}
+
+var archiveTmpl = template.Must(template.New("archive").Parse(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>molot runs archive</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<div class="container-fluid py-4">
+  <div class="d-flex justify-content-between align-items-baseline mb-3">
+    <h1 class="mb-0">molot runs archive</h1>
+    <small class="text-muted">
+      <a href="/">&larr; live</a> · {{.Now}} · bucket {{.Bucket}}
+    </small>
   </div>
 
   <table class="table table-sm table-striped table-bordered bg-white">
@@ -138,10 +187,16 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
         <td>{{if .Failed}}<strong>{{.Failed}}</strong> / {{.Total}}{{else}}— / {{.Total}}{{end}}</td>
       </tr>
     {{else}}
-      <tr><td colspan="4" class="text-muted">no runs in s3://{{$.Bucket}}/molot/{{$.Bucket}}/runs/ yet</td></tr>
+      <tr><td colspan="4" class="text-muted">no more runs</td></tr>
     {{end}}
     </tbody>
   </table>
+
+  {{if .HasNext}}
+  <div>
+    <a class="btn btn-secondary btn-sm" href="/archive?before={{.NextBefore}}">older &rarr;</a>
+  </div>
+  {{end}}
 </div>
 </body>
 </html>`))
@@ -222,7 +277,70 @@ func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
 			Bucket: s.cfg.S3Bucket,
 		}
 
-		entries := s.listRuns()
+		// In-flight runs (no EndedAt) live at the head of the list since
+		// keys are timestamps. 50 newest is plenty — anything older with
+		// no EndedAt is "stuck" and belongs in /archive, not here.
+		entries := s.listRuns("", 50)
+
+		for _, e := range entries {
+			run := s.fetchRun(e.Key)
+
+			status := runStatus(run, e.LastModified)
+
+			if status != "running" {
+				continue
+			}
+
+			row := runRow{
+				Key:       e.Key,
+				StartedAt: run.StartedAt.UTC().Format("2006-01-02 15:04:05Z"),
+				Total:     len(run.Nodes),
+				Status:    status,
+				Duration:  runDuration(run).Truncate(time.Second).String(),
+			}
+
+			for _, n := range run.Nodes {
+				if n.Failed {
+					row.Failed++
+				}
+			}
+
+			data.Runs = append(data.Runs, row)
+		}
+
+		var buf bytes.Buffer
+		Throw(indexTmpl.Execute(&buf, data))
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		Throw2(w.Write(buf.Bytes()))
+	})
+
+	exc.Catch(func(e *Exception) {
+		sendHTTPException(w, r, e)
+	})
+}
+
+func (s *webSrv) handleArchive(w http.ResponseWriter, r *http.Request) {
+	exc := Try(func() {
+		const pageSize = 50
+
+		before := r.URL.Query().Get("before")
+
+		data := archiveData{
+			Now:    time.Now().UTC().Format(time.RFC3339),
+			Bucket: s.cfg.S3Bucket,
+		}
+
+		// Fetch pageSize+1 to detect "has next page" without a separate
+		// count query. The (pageSize+1)th entry is dropped and its key
+		// becomes the cursor for the next page.
+		entries := s.listRuns(before, pageSize+1)
+
+		if len(entries) > pageSize {
+			data.HasNext = true
+			data.NextBefore = entries[pageSize-1].Key
+			entries = entries[:pageSize]
+		}
 
 		for _, e := range entries {
 			run := s.fetchRun(e.Key)
@@ -245,7 +363,7 @@ func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var buf bytes.Buffer
-		Throw(indexTmpl.Execute(&buf, data))
+		Throw(archiveTmpl.Execute(&buf, data))
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		Throw2(w.Write(buf.Bytes()))
@@ -448,14 +566,11 @@ type runEntry struct {
 	LastModified time.Time
 }
 
-// listRuns returns the most-recent N {key, lastmod} entries newest-
-// first. ISO keys lex-sort chronologically. Keys returned without the
-// "runs/" prefix or ".json" suffix — bare ts. LastModified comes from
-// S3, used by handleIndex to detect stuck running markers (initial
-// upload landed but heartbeat stopped).
-func (s *webSrv) listRuns() []runEntry {
-	const limit = 200
-
+// listRuns lists run entries newest-first; ISO keys lex-sort chrono.
+// `before` is an exclusive cursor (key < before) for pagination; empty
+// means "from newest". `limit` caps the page size. LastModified comes
+// from S3 and feeds runStatus's stuck-vs-running heuristic.
+func (s *webSrv) listRuns(before string, limit int) []runEntry {
 	full := s3List(context.Background(), s.cfg.S3Cli, s.cfg.S3Bucket, "runs/")
 
 	var entries []runEntry
@@ -465,6 +580,10 @@ func (s *webSrv) listRuns() []runEntry {
 		k = strings.TrimSuffix(k, ".json")
 
 		if k == "" {
+			continue
+		}
+
+		if before != "" && k >= before {
 			continue
 		}
 
