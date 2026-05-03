@@ -4,68 +4,41 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	_ "embed"
-	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
 	"os/exec"
-	"path"
 	"strconv"
 	"strings"
 	"syscall"
-	"text/template"
 	"time"
 )
 
-//go:embed wrap.sh.tmpl
-var wrapTmplSrc string
+// protocolVersion is the wire-protocol marker for `molot exec`. IX's
+// ops_molot.py mixes `molot hash` (sha256 of this string, first 12 hex)
+// into every uid through die/sh0.sh's `{{molot}}` comment. Bump this
+// string on any breaking change to the ExecTask schema, exit-code
+// semantics, mount layout, or fetch/push contract — the bump
+// invalidates every cached artifact in the fleet, mirroring the role
+// the wrap.sh.tmpl hash used to play before the shell wrapper went away.
+const protocolVersion = "v1.exec.json.stdin"
 
-// tmplHash is the first 12 hex chars of sha256(wrap.sh.tmpl). IX's
-// ops_molot.py queries it via `molot hash` and mixes it into every
-// node's uid through die/sh0.sh's `{{molot}}` template comment, so a
-// wrap.sh.tmpl edit already rotates every uid across the fleet — we
-// don't re-prefix it onto the gorn GUID here.
 var tmplHash = func() string {
-	h := sha256.Sum256([]byte(wrapTmplSrc))
+	h := sha256.Sum256([]byte(protocolVersion))
 
 	return hex.EncodeToString(h[:])[:12]
 }()
 
-var wrapTmpl = template.Must(template.New("wrap").Funcs(template.FuncMap{
-	"shT":      shT,
-	"shStore":  shQuote,
-	"shUpper":  shUpper,
-	"archT":    func(i int) string { return shT(fmt.Sprintf("/dep.%d.tar.zst", i)) },
-	"outT":     func() string { return shT("/out.tar.zst") },
-	"depUID":   parseUIDFromStorePath,
-	"stdinB64": func(c Cmd) string { return shQuote(base64.StdEncoding.EncodeToString([]byte(c.Stdin))) },
-	"cmdLine":  cmdLine,
-}).Parse(wrapTmplSrc))
-
-type wrapCtx struct {
-	UID    string
-	InDirs []string
-	Out    string
-	Cmds   []Cmd
-	// Net is true only for pool=network nodes (fetch tasks); every
-	// other cmd is wrapped in `unshare -r -n` so it runs in a fresh,
-	// empty network namespace. Matches assemble.go's net-deny policy.
-	Net bool
-}
-
 func dispatchNode(ex *Executor, n *Node) {
-	script := buildWrapScript(ex, n)
+	taskJSON := buildExecJSON(n)
 
 	if ex.cfg.Dump {
-		fmt.Fprintf(os.Stderr, "---- wrap script for %s ----\n%s---- end ----\n", n.OutDirs[0], script)
+		fmt.Fprintf(os.Stderr, "---- task json for %s ----\n%s\n---- end ----\n", n.OutDirs[0], taskJSON)
 	}
 
-	// The script can reach hundreds of KB on graphs with many in_dirs;
-	// passing it as argv to gorn ignite hits ARG_MAX (E2BIG) on larger
-	// builds. Pipe the body through ignite's --stdin-cmd instead.
 	slots := 1
 
 	if n.Pool == "full" {
@@ -79,6 +52,7 @@ func dispatchNode(ex *Executor, n *Node) {
 		"--descr", n.OutDirs[0],
 		"--api", ex.cfg.GornAPI,
 		"--root", ex.cfg.S3Root,
+		"--retry-error", strconv.Itoa(InfraExitCode),
 		"--slots", strconv.Itoa(slots),
 		"--env", "AWS_ACCESS_KEY_ID=" + ex.cfg.AWSKey,
 		"--env", "AWS_SECRET_ACCESS_KEY=" + ex.cfg.AWSSecret,
@@ -86,6 +60,7 @@ func dispatchNode(ex *Executor, n *Node) {
 		"--env", "S3_ENDPOINT=" + ex.cfg.S3Endpt,
 		"--env", "S3_BUCKET=" + ex.cfg.S3Bucket,
 		"--env", "MOLOT_S3_ROOT=" + ex.cfg.S3Root,
+		"--", "molot", "exec",
 	}
 
 	quiet := ex.cfg.Quiet
@@ -96,11 +71,12 @@ func dispatchNode(ex *Executor, n *Node) {
 	for {
 		cmd := exec.Command(ex.cfg.GornBin, args...)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
-		// Script body goes through stdin — gorn (v9+) always reads the
-		// script body from ignite's stdin; the --stdin-cmd flag is gone.
-		// Worker writes the script to a memfd and execs it directly, so
-		// there's no ARG_MAX limit on the body.
-		cmd.Stdin = strings.NewReader(script)
+
+		// gorn ignite in `-- argv` mode reads its own stdin and embeds
+		// it as the worker-side cmd's stdin (base64'd inside the
+		// synthesized script body — survives ARG_MAX). Worker's
+		// `molot exec` reads the JSON off its stdin and runs the task.
+		cmd.Stdin = strings.NewReader(taskJSON)
 
 		var stdout, stderr bytes.Buffer
 
@@ -162,12 +138,12 @@ func dispatchNode(ex *Executor, n *Node) {
 
 // verifyResult HEAD-checks that the producer actually uploaded
 // result.zstd for this node. gorn considers a task "done" the moment
-// result.json lands — but the tar+upload happens *after* that in the
-// wrap script, so a kill/OOM/disk-full between exit and upload leaves
+// result.json lands — but the tar+upload happens *after* that in
+// `molot exec`, so a kill/OOM/disk-full between exit and upload leaves
 // gorn happy (exit=0, result.json present) with no artifact. Downstream
-// nodes then fail on "Unable to prepare URL for copying" when they try
-// to pull the missing dep, hundreds of lines away from the real cause.
-// Failing here, on the producer itself, makes the root cause obvious.
+// nodes then fail when they try to pull the missing dep, hundreds of
+// lines away from the real cause. Failing here, on the producer itself,
+// makes the root cause obvious.
 func verifyResult(ex *Executor, n *Node) {
 	key := ex.cfg.ResultObjectKey(n.UID)
 
@@ -179,81 +155,16 @@ func verifyResult(ex *Executor, n *Node) {
 		n.UID, n.OutDirs[0], ex.cfg.S3Bucket, key)
 }
 
-func buildWrapScript(ex *Executor, n *Node) string {
-	ctx := wrapCtx{
+func buildExecJSON(n *Node) string {
+	et := ExecTask{
 		UID:    n.UID,
 		InDirs: n.InDirs,
-		Out:    n.OutDirs[0],
+		OutDir: n.OutDirs[0],
 		Cmds:   n.Cmds,
 		Net:    n.Pool == "network",
 	}
 
-	var buf strings.Builder
-	Throw(wrapTmpl.Execute(&buf, ctx))
+	data := Throw2(json.Marshal(et))
 
-	return buf.String()
-}
-
-func cmdLine(c Cmd) string {
-	if len(c.Args) == 0 {
-		ThrowFmt("cmd with empty args")
-	}
-
-	// IX_RANDOM / make_thrs: stock assemble.go injects these on every cmd
-	// (see as.go:env). IX_RANDOM is used by fast_rm for trash-dir suffixes;
-	// make_thrs picks parallelism for make. Computed at cmd invocation so
-	// IX_RANDOM differs per cmd like as.go does.
-	parts := []string{
-		"env", "-i",
-		`"IX_RANDOM=$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')"`,
-		`"make_thrs=$MOLOT_MAKE_THRS"`,
-	}
-
-	for k, v := range c.Env {
-		parts = append(parts, shQuote(k+"="+v))
-	}
-
-	for _, a := range c.Args {
-		parts = append(parts, shQuote(a))
-	}
-
-	return strings.Join(parts, " ")
-}
-
-func shQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// shT emits `"$T"'<suffix>'` — single-quoted literal concatenated after the
-// expanded $T. Needed because shQuote alone would single-quote $T itself,
-// suppressing the expansion.
-func shT(suffix string) string {
-	return `"$T"` + shQuote(suffix)
-}
-
-// shUpper translates an absolute /ix/store/<uid>-<name> path into the
-// corresponding path inside the overlay upper dir, i.e.
-// "$T"'/ovl/upper/<uid>-<name>'. Used to address the upper layer directly
-// (before overlay is mounted, or for operations overlay forbids through
-// the mount such as user.overlay.* xattr writes in userxattr mode).
-func shUpper(abs string) string {
-	const prefix = "/ix/store/"
-
-	if !strings.HasPrefix(abs, prefix) {
-		ThrowFmt("shUpper: path %q does not start with %s", abs, prefix)
-	}
-
-	return `"$T"` + shQuote("/ovl/upper/"+strings.TrimPrefix(abs, prefix))
-}
-
-
-func parseUIDFromStorePath(p string) string {
-	base := path.Base(p)
-	idx := strings.Index(base, "-")
-
-	if idx <= 0 {
-		ThrowFmt("cannot parse uid from store path %q", p)
-	}
-
-	return base[:idx]
+	return string(data)
 }

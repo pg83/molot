@@ -53,6 +53,10 @@ func main() {
 			runSubcommand(func() { pushMain(os.Args[2:]) })
 
 			return
+		case "exec":
+			runSubcommand(func() { execMain(os.Args[2:]) })
+
+			return
 		}
 	}
 
