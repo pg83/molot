@@ -40,8 +40,7 @@ var wrapTmpl = template.Must(template.New("wrap").Funcs(template.FuncMap{
 	"shUpper":  shUpper,
 	"archT":    func(i int) string { return shT(fmt.Sprintf("/dep.%d.tar.zst", i)) },
 	"outT":     func() string { return shT("/out.tar.zst") },
-	"depS3":    func(in string) string { return shS3Root(fmt.Sprintf("/%s/result.zstd", parseUIDFromStorePath(in))) },
-	"selfS3":   func(uid string) string { return shS3Root(fmt.Sprintf("/%s/result.zstd", uid)) },
+	"depUID":   parseUIDFromStorePath,
 	"stdinB64": func(c Cmd) string { return shQuote(base64.StdEncoding.EncodeToString([]byte(c.Stdin))) },
 	"cmdLine":  cmdLine,
 }).Parse(wrapTmplSrc))
@@ -247,14 +246,6 @@ func shUpper(abs string) string {
 	return `"$T"` + shQuote("/ovl/upper/"+strings.TrimPrefix(abs, prefix))
 }
 
-
-// shS3Root emits `"molot/$S3_BUCKET/$MOLOT_S3_ROOT"'<suffix>'` —
-// a minio-client path rooted at the configurable prefix under the
-// bucket. "molot" is the minio-client alias (set via MC_HOST_molot);
-// $MOLOT_S3_ROOT is exported by the outer wrap.
-func shS3Root(suffix string) string {
-	return `"molot/$S3_BUCKET/$MOLOT_S3_ROOT"` + shQuote(suffix)
-}
 
 func parseUIDFromStorePath(p string) string {
 	base := path.Base(p)

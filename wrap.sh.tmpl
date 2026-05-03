@@ -8,9 +8,6 @@ set -eux
 : "${MOLOT_S3_ROOT:?}"
 : "${MOLOT_CPUS:?}"
 
-S3_SCHEME="${S3_ENDPOINT%%://*}"
-S3_HOST="${S3_ENDPOINT#*://}"
-export MC_HOST_molot="${S3_SCHEME}://${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}@${S3_HOST}"
 export MOLOT_MAKE_THRS="${MOLOT_CPUS}"
 export PATH=/bin:/ix/realm/system/bin:${PATH:-}
 
@@ -79,7 +76,7 @@ mkdir -p /dev/shm
 mount -t tmpfs tmpfs /dev/shm
 
 {{range $i, $in := .InDirs -}}
-minio-client cp {{depS3 $in}} {{archT $i}}
+molot fetch {{depUID $in}} {{archT $i}}
 tar --use-compress-program=unzstd -xf {{archT $i}} -C {{shStore $in}}
 rm -f {{archT $i}}
 {{end}}
@@ -92,4 +89,4 @@ printf %s {{stdinB64 $c}} | base64 -d | {{if not $.Net}}/bin/unshare -r -n {{end
 {{end}}
 
 tar --use-compress-program=zstd -cf {{outT}} -C {{shStore .Out}} .
-minio-client cp {{outT}} {{selfS3 .UID}}
+molot push {{.UID}} {{outT}}

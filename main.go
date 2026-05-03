@@ -45,6 +45,14 @@ func main() {
 			runSubcommand(func() { webMain(os.Args[2:]) })
 
 			return
+		case "fetch":
+			runSubcommand(func() { fetchMain(os.Args[2:]) })
+
+			return
+		case "push":
+			runSubcommand(func() { pushMain(os.Args[2:]) })
+
+			return
 		}
 	}
 
