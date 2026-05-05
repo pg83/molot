@@ -265,11 +265,6 @@ func verifyPredict(t ExecTask) {
 	for _, p := range t.Predict {
 		actual := sha256File(p.Path)
 
-		if len(p.Sum) < 16 {
-			fmt.Fprintf(os.Stderr, "molot exec: predict bootstrap %s actual sha256=%s (sum=%q is short)\n", p.Path, actual, p.Sum)
-			ThrowFmt("predict bootstrap: %s sum=%q < 16 chars; actual=%s", p.Path, p.Sum, actual)
-		}
-
 		if actual != p.Sum {
 			ThrowFmt("predict mismatch: %s expected=%s actual=%s", p.Path, p.Sum, actual)
 		}
