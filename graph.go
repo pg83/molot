@@ -11,12 +11,18 @@ type Cmd struct {
 	Env   map[string]string `json:"env,omitempty"`
 }
 
+type Predict struct {
+	Path string `json:"path"`
+	Sum  string `json:"sum"`
+}
+
 type Node struct {
-	UID     string   `json:"uid"`
-	InDirs  []string `json:"in_dir"`
-	OutDirs []string `json:"out_dir"`
-	Cmds    []Cmd    `json:"cmd"`
-	Pool    string   `json:"pool"`
+	UID     string    `json:"uid"`
+	InDirs  []string  `json:"in_dir"`
+	OutDirs []string  `json:"out_dir"`
+	Cmds    []Cmd     `json:"cmd"`
+	Pool    string    `json:"pool"`
+	Predict []Predict `json:"predict,omitempty"`
 }
 
 type Graph struct {

@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,11 +31,12 @@ import (
 const InfraExitCode = 100
 
 type ExecTask struct {
-	UID    string   `json:"uid"`
-	InDirs []string `json:"in_dirs"`
-	OutDir string   `json:"out_dir"`
-	Cmds   []Cmd    `json:"cmds"`
-	Net    bool     `json:"net,omitempty"`
+	UID     string    `json:"uid"`
+	InDirs  []string  `json:"in_dirs"`
+	OutDir  string    `json:"out_dir"`
+	Cmds    []Cmd     `json:"cmds"`
+	Net     bool      `json:"net,omitempty"`
+	Predict []Predict `json:"predict,omitempty"`
 }
 
 func execMain(args []string) {
@@ -63,6 +66,15 @@ func execMain(args []string) {
 	if scriptExit != 0 {
 		fmt.Fprintln(os.Stderr, "molot exec: script exit", scriptExit)
 		os.Exit(scriptExit)
+	}
+
+	verifyExc := Try(func() {
+		verifyPredict(task)
+	})
+
+	if verifyExc != nil {
+		fmt.Fprintln(os.Stderr, "molot exec: predict mismatch:", verifyExc.Error())
+		os.Exit(1)
 	}
 
 	pushExc := Try(func() {
@@ -237,6 +249,31 @@ func ixRandom() string {
 	Throw2(rand.Read(b[:]))
 
 	return strconv.FormatUint(uint64(binary.LittleEndian.Uint32(b[:])), 10)
+}
+
+func sha256File(path string) string {
+	f := Throw2(os.Open(path))
+	defer f.Close()
+
+	h := sha256.New()
+	Throw2(io.Copy(h, f))
+
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func verifyPredict(t ExecTask) {
+	for _, p := range t.Predict {
+		actual := sha256File(p.Path)
+
+		if len(p.Sum) < 16 {
+			fmt.Fprintf(os.Stderr, "molot exec: predict bootstrap %s actual sha256=%s (sum=%q is short)\n", p.Path, actual, p.Sum)
+			ThrowFmt("predict bootstrap: %s sum=%q < 16 chars; actual=%s", p.Path, p.Sum, actual)
+		}
+
+		if actual != p.Sum {
+			ThrowFmt("predict mismatch: %s expected=%s actual=%s", p.Path, p.Sum, actual)
+		}
+	}
 }
 
 func pushOutput(cfg *Config, cwd string, t ExecTask) {

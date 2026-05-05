@@ -24,7 +24,7 @@ import (
 // semantics, mount layout, or fetch/push contract — the bump
 // invalidates every cached artifact in the fleet, mirroring the role
 // the wrap.sh.tmpl hash used to play before the shell wrapper went away.
-const protocolVersion = "v1.exec.json.stdin"
+const protocolVersion = "v2.exec.json.stdin.predict"
 
 var tmplHash = func() string {
 	h := sha256.Sum256([]byte(protocolVersion))
@@ -157,11 +157,12 @@ func verifyResult(ex *Executor, n *Node) {
 
 func buildExecJSON(n *Node) string {
 	et := ExecTask{
-		UID:    n.UID,
-		InDirs: n.InDirs,
-		OutDir: n.OutDirs[0],
-		Cmds:   n.Cmds,
-		Net:    n.Pool == "network",
+		UID:     n.UID,
+		InDirs:  n.InDirs,
+		OutDir:  n.OutDirs[0],
+		Cmds:    n.Cmds,
+		Net:     n.Pool == "network",
+		Predict: n.Predict,
 	}
 
 	data := Throw2(json.Marshal(et))
