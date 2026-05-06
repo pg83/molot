@@ -108,8 +108,6 @@ func (ex *Executor) visitAll(outs []string) []bool {
 }
 
 func (ex *Executor) executeNode(n *Node) bool {
-	ex.total.Add(1)
-
 	guid := n.UID
 	out := n.OutDirs[0]
 	rec := NodeRec{UID: guid, Out: out, StartedAt: time.Now()}
@@ -119,13 +117,16 @@ func (ex *Executor) executeNode(n *Node) bool {
 
 		rec.FinishedAt = time.Now()
 		rec.Cached = true
+
 		ex.recordRec(rec)
 
-		ex.done.Add(1)
 		fmt.Fprintln(os.Stderr, clr(clrG, ex.progress()+" CACHE "+out))
 
 		return false
 	}
+
+	ex.total.Add(1)
+	defer ex.done.Add(1)
 
 	ins := make([]string, 0, len(n.InDirs))
 
@@ -148,6 +149,7 @@ func (ex *Executor) executeNode(n *Node) bool {
 	if brokenBy != "" {
 		rec.FinishedAt = time.Now()
 		rec.Failed = true
+
 		ex.recordRec(rec)
 
 		fmt.Fprintln(os.Stderr, clr(clrR, ex.progress()+" BROKEN BY DEP "+brokenBy+" "+out))
@@ -175,7 +177,6 @@ func (ex *Executor) executeNode(n *Node) bool {
 
 	ex.recordRec(rec)
 	ex.cache.Add(guid)
-	ex.done.Add(1)
 
 	fmt.Fprintln(os.Stderr, clr(clrG, ex.progress()+" LEAVE "+out))
 

@@ -29,6 +29,8 @@ type Graph struct {
 	Nodes   []Node         `json:"nodes"`
 	Targets []string       `json:"targets"`
 	Pools   map[string]int `json:"pools"`
+	Argv    []string       `json:"argv,omitempty"`
+	GitRev  string         `json:"git_rev,omitempty"`
 }
 
 func readGraph(r io.Reader) *Graph {

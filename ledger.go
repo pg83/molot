@@ -19,6 +19,10 @@ type Run struct {
 	StartedAt time.Time `json:"started_at"`
 	EndedAt   time.Time `json:"ended_at"`
 	Targets   []string  `json:"targets"`
+	Argv      []string  `json:"argv,omitempty"`
+	GitRev    string    `json:"git_rev,omitempty"`
+	Done      uint64    `json:"done"`
+	Total     uint64    `json:"total"`
 	Failed    bool      `json:"failed,omitempty"`
 	Nodes     []NodeRec `json:"nodes"`
 }

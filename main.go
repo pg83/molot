@@ -99,11 +99,20 @@ func run() {
 
 	ledger := newLedger()
 	started := time.Now()
+	ex := newExecutor(g, cfg, ledger)
 
 	fmt.Fprintln(os.Stderr, "molot: started, ledger key=s3://"+cfg.S3Bucket+"/"+runKey(started))
 
 	exc := Try(func() {
-		uploadLedger(cfg, Run{StartedAt: started, Targets: g.Targets, Nodes: ledger.Snapshot()})
+		uploadLedger(cfg, Run{
+			StartedAt: started,
+			Targets:   g.Targets,
+			Argv:      g.Argv,
+			GitRev:    g.GitRev,
+			Done:      ex.done.Load(),
+			Total:     ex.total.Load(),
+			Nodes:     ledger.Snapshot(),
+		})
 	})
 
 	exc.Catch(func(e *Exception) {
@@ -121,14 +130,10 @@ func run() {
 	heartbeatStop := make(chan struct{})
 	heartbeatExit := make(chan struct{})
 
-	go heartbeat(cfg, started, g.Targets, ledger, heartbeatStop, heartbeatExit)
+	go heartbeat(cfg, started, g, ex, ledger, heartbeatStop, heartbeatExit)
 
-	ex := newExecutor(g, cfg, ledger)
 	ex.visitAll(g.Targets)
 
-	// Stop the heartbeat BEFORE writing the final manifest — otherwise
-	// an in-flight heartbeat after Close() could race the final upload
-	// and leave a partial running snapshot as the last write.
 	close(heartbeatStop)
 	<-heartbeatExit
 
@@ -146,6 +151,10 @@ func run() {
 		StartedAt: started,
 		EndedAt:   time.Now(),
 		Targets:   g.Targets,
+		Argv:      g.Argv,
+		GitRev:    g.GitRev,
+		Done:      ex.done.Load(),
+		Total:     ex.total.Load(),
 		Failed:    failed > 0,
 		Nodes:     recs,
 	}
@@ -171,7 +180,7 @@ func run() {
 // failure logs a warning and the next tick retries; permanent failure
 // just means the run will be classified "stuck" in the UI once
 // HeartbeatPeriod×3 elapses.
-func heartbeat(cfg *Config, started time.Time, targets []string, ledger *Ledger, stop <-chan struct{}, exit chan<- struct{}) {
+func heartbeat(cfg *Config, started time.Time, g *Graph, ex *Executor, ledger *Ledger, stop <-chan struct{}, exit chan<- struct{}) {
 	defer close(exit)
 
 	t := time.NewTicker(HeartbeatPeriod)
@@ -184,7 +193,11 @@ func heartbeat(cfg *Config, started time.Time, targets []string, ledger *Ledger,
 		case <-t.C:
 			r := Run{
 				StartedAt: started,
-				Targets:   targets,
+				Targets:   g.Targets,
+				Argv:      g.Argv,
+				GitRev:    g.GitRev,
+				Done:      ex.done.Load(),
+				Total:     ex.total.Load(),
 				Nodes:     ledger.Snapshot(),
 			}
 

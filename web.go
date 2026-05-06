@@ -95,12 +95,14 @@ type webSrv struct {
 }
 
 type runRow struct {
-	Key       string
-	StartedAt string
-	Duration  string
-	Status    string
-	Failed    int
-	Total     int
+	Key      string
+	Argv     string
+	GitRev   string
+	Duration string
+	Status   string
+	Failed   int
+	Done     uint64
+	Total    uint64
 }
 
 type indexData struct {
@@ -129,18 +131,19 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 
   <table class="table table-sm table-striped table-bordered bg-white">
     <thead class="table-dark">
-      <tr><th>started</th><th>duration</th><th>status</th><th>failed / total</th></tr>
+      <tr><th>argv</th><th>rev</th><th>duration</th><th>status</th><th>failed / done / total</th></tr>
     </thead>
     <tbody>
     {{range .Runs}}
       <tr class="table-info">
-        <td><a href="/run/{{.Key}}"><code>{{.StartedAt}}</code></a></td>
+        <td><a href="/run/{{.Key}}"><code>{{if .Argv}}{{.Argv}}{{else}}—{{end}}</code></a></td>
+        <td><code title="{{.GitRev}}">{{if .GitRev}}{{slice .GitRev 0 12}}{{else}}—{{end}}</code></td>
         <td>{{.Duration}}</td>
         <td><strong>{{.Status}}</strong></td>
-        <td>{{if .Failed}}<strong>{{.Failed}}</strong> / {{.Total}}{{else}}— / {{.Total}}{{end}}</td>
+        <td>{{if .Failed}}<strong class="text-danger">{{.Failed}}</strong>{{else}}—{{end}} / <span class="text-success">{{.Done}}</span> / {{.Total}}</td>
       </tr>
     {{else}}
-      <tr><td colspan="4" class="text-muted">no running runs — see <a href="/archive">archive</a></td></tr>
+      <tr><td colspan="5" class="text-muted">no running runs — see <a href="/archive">archive</a></td></tr>
     {{end}}
     </tbody>
   </table>
@@ -174,18 +177,19 @@ var archiveTmpl = template.Must(template.New("archive").Parse(`<!DOCTYPE html>
 
   <table class="table table-sm table-striped table-bordered bg-white">
     <thead class="table-dark">
-      <tr><th>started</th><th>duration</th><th>status</th><th>failed / total</th></tr>
+      <tr><th>argv</th><th>rev</th><th>duration</th><th>status</th><th>failed / done / total</th></tr>
     </thead>
     <tbody>
     {{range .Runs}}
       <tr class="{{if eq .Status "running"}}table-info{{else if eq .Status "failed"}}table-danger{{else if eq .Status "stuck"}}table-secondary{{else}}table-success{{end}}">
-        <td><a href="/run/{{.Key}}"><code>{{.StartedAt}}</code></a></td>
+        <td><a href="/run/{{.Key}}"><code>{{if .Argv}}{{.Argv}}{{else}}—{{end}}</code></a></td>
+        <td><code title="{{.GitRev}}">{{if .GitRev}}{{slice .GitRev 0 12}}{{else}}—{{end}}</code></td>
         <td>{{.Duration}}</td>
         <td><strong>{{.Status}}</strong></td>
-        <td>{{if .Failed}}<strong>{{.Failed}}</strong> / {{.Total}}{{else}}— / {{.Total}}{{end}}</td>
+        <td>{{if .Failed}}<strong class="text-danger">{{.Failed}}</strong>{{else}}—{{end}} / <span class="text-success">{{.Done}}</span> / {{.Total}}</td>
       </tr>
     {{else}}
-      <tr><td colspan="4" class="text-muted">no more runs</td></tr>
+      <tr><td colspan="5" class="text-muted">no more runs</td></tr>
     {{end}}
     </tbody>
   </table>
@@ -299,11 +303,13 @@ func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
 			}
 
 			row := runRow{
-				Key:       e.Key,
-				StartedAt: run.StartedAt.UTC().Format("2006-01-02 15:04:05Z"),
-				Total:     len(run.Nodes),
-				Status:    "running",
-				Duration:  runDuration(run).Truncate(time.Second).String(),
+				Key:      e.Key,
+				Argv:     strings.Join(run.Argv, " "),
+				GitRev:   run.GitRev,
+				Done:     run.Done,
+				Total:    run.Total,
+				Status:   "running",
+				Duration: runDuration(run).Truncate(time.Second).String(),
 			}
 
 			for _, n := range run.Nodes {
@@ -353,11 +359,13 @@ func (s *webSrv) handleArchive(w http.ResponseWriter, r *http.Request) {
 			run := s.fetchRun(e.Key)
 
 			row := runRow{
-				Key:       e.Key,
-				StartedAt: run.StartedAt.UTC().Format("2006-01-02 15:04:05Z"),
-				Total:     len(run.Nodes),
-				Status:    runStatus(run, e.LastModified),
-				Duration:  runDuration(run).Truncate(time.Second).String(),
+				Key:      e.Key,
+				Argv:     strings.Join(run.Argv, " "),
+				GitRev:   run.GitRev,
+				Done:     run.Done,
+				Total:    run.Total,
+				Status:   runStatus(run, e.LastModified),
+				Duration: runDuration(run).Truncate(time.Second).String(),
 			}
 
 			for _, n := range run.Nodes {
