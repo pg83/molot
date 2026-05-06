@@ -23,25 +23,34 @@ func (fu *future) callOnce() bool {
 	return fu.failed
 }
 
+// MaxConcurrentDispatches caps how many `gorn ignite` subprocesses
+// molot keeps in flight at once. Anything beyond this is wasted load
+// on gorn-control + the etcd queue with no throughput benefit — gorn
+// itself serializes per endpoint (one task per endpoint user) and a
+// dispatcher backlog only inflates HTTP roundtrips.
+const MaxConcurrentDispatches = 100
+
 type Executor struct {
-	g       *Graph
-	cfg     *Config
-	cache   *Cache
-	byOut   map[string]*Node
-	futures map[string]*future
-	done    atomic.Uint64
-	total   atomic.Uint64
-	ledger  *Ledger
+	g           *Graph
+	cfg         *Config
+	cache       *Cache
+	byOut       map[string]*Node
+	futures     map[string]*future
+	done        atomic.Uint64
+	total       atomic.Uint64
+	ledger      *Ledger
+	dispatchSem chan struct{}
 }
 
 func newExecutor(g *Graph, cfg *Config, ledger *Ledger) *Executor {
 	ex := &Executor{
-		g:       g,
-		cfg:     cfg,
-		cache:   openCache(cfg.CacheFile),
-		byOut:   map[string]*Node{},
-		futures: map[string]*future{},
-		ledger:  ledger,
+		g:           g,
+		cfg:         cfg,
+		cache:       openCache(cfg.CacheFile),
+		byOut:       map[string]*Node{},
+		futures:     map[string]*future{},
+		ledger:      ledger,
+		dispatchSem: make(chan struct{}, MaxConcurrentDispatches),
 	}
 
 	for i := range g.Nodes {
@@ -160,6 +169,9 @@ func (ex *Executor) executeNode(n *Node) bool {
 	fmt.Fprintln(os.Stderr, clr(clrB, ex.progress()+" ENTER "+out))
 
 	exc := Try(func() {
+		ex.dispatchSem <- struct{}{}
+		defer func() { <-ex.dispatchSem }()
+
 		dispatchNode(ex, n)
 	})
 

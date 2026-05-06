@@ -442,6 +442,17 @@ func (s *webSrv) handleRun(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func contentTypeFor(name string) string {
+	switch {
+	case strings.HasSuffix(name, ".json"):
+		return "application/json; charset=utf-8"
+	case strings.HasSuffix(name, ".zstd"), strings.HasSuffix(name, ".zst"):
+		return "application/zstd"
+	}
+
+	return "text/plain; charset=utf-8"
+}
+
 func (s *webSrv) handleNodeStream(w http.ResponseWriter, r *http.Request) {
 	exc := Try(func() {
 		rest := strings.TrimPrefix(r.URL.Path, "/node/")
@@ -464,9 +475,7 @@ func (s *webSrv) handleNodeStream(w http.ResponseWriter, r *http.Request) {
 			ThrowHTTP(resp.StatusCode, "gorn-control HTTP %d: %s", resp.StatusCode, body)
 		}
 
-		if ct := resp.Header.Get("Content-Type"); ct != "" {
-			w.Header().Set("Content-Type", ct)
-		}
+		w.Header().Set("Content-Type", contentTypeFor(name))
 
 		Throw2(io.Copy(w, resp.Body))
 	})
