@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -439,47 +437,30 @@ func (s *webSrv) handleRun(w http.ResponseWriter, r *http.Request) {
 func (s *webSrv) handleNodeStream(w http.ResponseWriter, r *http.Request) {
 	exc := Try(func() {
 		rest := strings.TrimPrefix(r.URL.Path, "/node/")
-		parts := strings.Split(rest, "/")
+		parts := strings.SplitN(rest, "/", 2)
 
-		if len(parts) != 2 || parts[0] == "" {
-			ThrowHTTP(http.StatusBadRequest, "expected /node/<uid>/{stderr,stdout}")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			ThrowHTTP(http.StatusBadRequest, "expected /node/<uid>/<file>")
 		}
 
-		uid, kind := parts[0], parts[1]
+		uid, name := parts[0], parts[1]
 
-		if kind != "stderr" && kind != "stdout" {
-			ThrowHTTP(http.StatusBadRequest, "expected stderr or stdout")
-		}
-
-		url := fmt.Sprintf("%s/v1/tasks/%s/output?root=%s", strings.TrimRight(s.cfg.GornAPI, "/"), uid, s.cfg.S3Root)
+		url := fmt.Sprintf("%s/v1/tasks/%s/content/%s?root=%s", strings.TrimRight(s.cfg.GornAPI, "/"), uid, name, s.cfg.S3Root)
 
 		req := Throw2(http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil))
 		resp := Throw2(s.http.Do(req))
 		defer resp.Body.Close()
 
-		body := Throw2(io.ReadAll(resp.Body))
-
 		if resp.StatusCode != http.StatusOK {
-			ThrowHTTP(http.StatusBadGateway, "gorn-control HTTP %d: %s", resp.StatusCode, body)
+			body := Throw2(io.ReadAll(resp.Body))
+			ThrowHTTP(resp.StatusCode, "gorn-control HTTP %d: %s", resp.StatusCode, body)
 		}
 
-		var out struct {
-			StdoutB64 string `json:"stdout_b64"`
-			StderrB64 string `json:"stderr_b64"`
+		if ct := resp.Header.Get("Content-Type"); ct != "" {
+			w.Header().Set("Content-Type", ct)
 		}
 
-		Throw(json.Unmarshal(body, &out))
-
-		enc := out.StderrB64
-
-		if kind == "stdout" {
-			enc = out.StdoutB64
-		}
-
-		dec := Throw2(base64.StdEncoding.DecodeString(enc))
-
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		Throw2(w.Write(dec))
+		Throw2(io.Copy(w, resp.Body))
 	})
 
 	exc.Catch(func(e *Exception) {
