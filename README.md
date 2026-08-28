@@ -17,7 +17,16 @@ export AWS_SECRET_ACCESS_KEY=...
 
 # Produce a graph from IX, pipe into molot:
 cd path/to/ix && IX_DUMP_GRAPH=1 IX_FLAGS='stalix=' ./ix build lib/c | molot
+
+# Continue independent branches after failures (default is fail-fast):
+cd path/to/ix && IX_DUMP_GRAPH=1 IX_FLAGS='stalix=' ./ix build set/ci | molot -k
 ```
+
+Molot exits with status 2 as soon as the first direct node failure is
+reported. Already-running remote gorn tasks may finish and populate the
+content-addressed cache, but Molot stops waiting for the rest of the graph.
+Pass `-k` explicitly to keep traversing independent branches and report all
+failures plus nodes broken by failed dependencies.
 
 Debug the generated wrap scripts without touching gorn:
 

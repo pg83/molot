@@ -39,18 +39,19 @@ func expandEnv(s string) string {
 }
 
 type Config struct {
-	GornBin   string `json:"gorn_bin,omitempty"`
-	GornAPI   string `json:"gorn_api,omitempty"`
-	S3Bucket  string `json:"s3_bucket,omitempty"`
-	S3Endpt   string `json:"s3_endpoint,omitempty"`
-	AWSKey    string `json:"aws_access_key_id,omitempty"`
-	AWSSecret string `json:"aws_secret_access_key,omitempty"`
-	AWSRegion string `json:"aws_region,omitempty"`
-	S3Root    string `json:"s3_root,omitempty"`
-	FullSlots int    `json:"full_slots,omitempty"`
-	CacheFile string `json:"cache_file,omitempty"`
-	Dump      bool   `json:"dump,omitempty"`
-	Quiet     bool   `json:"quiet,omitempty"`
+	GornBin   string     `json:"gorn_bin,omitempty"`
+	GornAPI   string     `json:"gorn_api,omitempty"`
+	S3Bucket  string     `json:"s3_bucket,omitempty"`
+	S3Endpt   string     `json:"s3_endpoint,omitempty"`
+	AWSKey    string     `json:"aws_access_key_id,omitempty"`
+	AWSSecret string     `json:"aws_secret_access_key,omitempty"`
+	AWSRegion string     `json:"aws_region,omitempty"`
+	S3Root    string     `json:"s3_root,omitempty"`
+	FullSlots int        `json:"full_slots,omitempty"`
+	CacheFile string     `json:"cache_file,omitempty"`
+	Dump      bool       `json:"dump,omitempty"`
+	Quiet     bool       `json:"quiet,omitempty"`
+	KeepGoing bool       `json:"-"` // CLI-only: -k
 	UID       string     `json:"-"` // not meaningful in a config file; runtime-only
 	S3Cli     *s3.Client `json:"-"` // initialized in validate()
 }
@@ -76,6 +77,7 @@ type cliOpts struct {
 	cacheFile string
 	dump      bool
 	quiet     bool
+	keepGoing bool
 	uid       string
 }
 
@@ -98,6 +100,7 @@ func parseCLI(args []string) (*cliOpts, *flag.FlagSet) {
 	fs.StringVar(&o.cacheFile, "cache", "", "local success-cache file: one gorn GUID per line; nodes whose GUID is present are skipped (env MOLOT_CACHE)")
 	fs.BoolVar(&o.dump, "dump", false, "dump each generated wrap script to stderr (env MOLOT_DUMP)")
 	fs.BoolVar(&o.quiet, "quiet", false, "suppress per-task stream, print only on failure (env MOLOT_QUIET)")
+	fs.BoolVar(&o.keepGoing, "k", false, "keep going after node failures (default: exit on the first failure)")
 	fs.StringVar(&o.uid, "uid", "", "run only the node with this uid, skipping dep traversal (for debugging)")
 
 	Throw(fs.Parse(args))
@@ -167,7 +170,8 @@ func loadConfig(args []string) *Config {
 	c.CacheFile = setFromFlagStr(fs, "cache", c.CacheFile, o.cacheFile)
 	c.Dump = setFromFlagBool(fs, "dump", c.Dump, o.dump)
 	c.Quiet = setFromFlagBool(fs, "quiet", c.Quiet, o.quiet)
-	c.UID = o.uid // CLI-only
+	c.KeepGoing = o.keepGoing // CLI-only: fail-fast unless -k was explicit.
+	c.UID = o.uid             // CLI-only
 
 	// Defaults.
 	if c.AWSRegion == "" {

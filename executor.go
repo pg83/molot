@@ -40,6 +40,7 @@ type Executor struct {
 	total       atomic.Uint64
 	ledger      *Ledger
 	dispatchSem chan struct{}
+	exit        func(int)
 }
 
 func newExecutor(g *Graph, cfg *Config, ledger *Ledger) *Executor {
@@ -51,6 +52,7 @@ func newExecutor(g *Graph, cfg *Config, ledger *Ledger) *Executor {
 		futures:     map[string]*future{},
 		ledger:      ledger,
 		dispatchSem: make(chan struct{}, MaxConcurrentDispatches),
+		exit:        os.Exit,
 	}
 
 	for i := range g.Nodes {
@@ -178,13 +180,7 @@ func (ex *Executor) executeNode(n *Node) bool {
 	rec.FinishedAt = time.Now()
 
 	if exc != nil {
-		rec.Failed = true
-		ex.recordRec(rec)
-
-		fmt.Fprintln(os.Stderr, clr(clrR, ex.progress()+" FAILED "+out+": "+exc.Error()))
-		fmt.Fprintln(os.Stderr, clr(clrR, "node failed: "+exc.Error()))
-
-		return true
+		return ex.failNode(rec, out, exc)
 	}
 
 	ex.recordRec(rec)
@@ -193,6 +189,20 @@ func (ex *Executor) executeNode(n *Node) bool {
 	fmt.Fprintln(os.Stderr, clr(clrG, ex.progress()+" LEAVE "+out))
 
 	return false
+}
+
+func (ex *Executor) failNode(rec NodeRec, out string, exc *Exception) bool {
+	rec.Failed = true
+	ex.recordRec(rec)
+
+	fmt.Fprintln(os.Stderr, clr(clrR, ex.progress()+" FAILED "+out+": "+exc.Error()))
+	fmt.Fprintln(os.Stderr, clr(clrR, "node failed: "+exc.Error()))
+
+	if !ex.cfg.KeepGoing {
+		ex.exit(2)
+	}
+
+	return true
 }
 
 func (ex *Executor) recordRec(r NodeRec) {

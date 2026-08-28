@@ -84,9 +84,13 @@ Fetch nodes (`pool: network`) run on the worker — worker needs outbound intern
 
 Currently no client-side pool semaphores. gorn itself serializes at the endpoint-user level (one task per endpoint at a time) and that's the only throttle. If the graph's node count grows large enough to DoS gorn/S3, add pool semaphores keyed by `node.Pool` in `executor.go` — IX pools are `threads`, `network`, `misc`, `slot`, `full`.
 
-## Cancellation
+## Failure mode
 
-None. When a node fails, in-flight siblings keep running to their natural end. Downstream nodes that depend on the failed node will fail when their wrap script's `aws s3 cp` of the missing dep archive exits non-zero under `set -e`. That's our only propagation mechanism — intentional.
+The default is fail-fast: the first direct node failure exits Molot with
+status 2. Its local `gorn ignite --wait` children receive `Pdeathsig=SIGKILL`;
+already-dispatched remote tasks may finish and warm the content-addressed
+cache. `molot -k` explicitly enables keep-going: independent graph branches
+continue, while downstream nodes are reported as `BROKEN BY DEP`.
 
 ## Build / run
 
