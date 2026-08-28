@@ -86,9 +86,9 @@ Currently no client-side pool semaphores. gorn itself serializes at the endpoint
 
 ## Failure mode
 
-The default is fail-fast: the first direct node failure exits Molot with
-status 2. Its local `gorn ignite --wait` children receive `Pdeathsig=SIGKILL`;
-already-dispatched remote tasks may finish and warm the content-addressed
+The default is fail-fast: the first direct node failure cancels Molot's local
+`gorn ignite --wait` children, finalizes the run ledger, and exits with status
+2. Already-dispatched remote tasks may finish and warm the content-addressed
 cache. `molot -k` explicitly enables keep-going: independent graph branches
 continue, while downstream nodes are reported as `BROKEN BY DEP`.
 

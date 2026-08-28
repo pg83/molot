@@ -1,18 +1,18 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 )
 
-func TestFailNodeExitsByDefault(t *testing.T) {
-	exitCode := 0
+func TestFailNodeCancelsByDefault(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
 	ex := &Executor{
-		cfg: &Config{},
-		exit: func(code int) {
-			exitCode = code
-		},
+		cfg:    &Config{},
+		ctx:    ctx,
+		cancel: cancel,
 	}
 	rec := NodeRec{UID: "broken", Out: "/ix/store/broken", StartedAt: time.Now(), FinishedAt: time.Now()}
 
@@ -20,18 +20,17 @@ func TestFailNodeExitsByDefault(t *testing.T) {
 		t.Fatal("failed node must propagate failure")
 	}
 
-	if exitCode != 2 {
-		t.Fatalf("default failure exit code = %d, want 2", exitCode)
+	if ex.ctx.Err() != context.Canceled {
+		t.Fatalf("default failure did not cancel executor: %v", ex.ctx.Err())
 	}
 }
 
 func TestFailNodeKeepsGoingOnlyWithFlag(t *testing.T) {
-	exited := false
+	ctx, cancel := context.WithCancel(context.Background())
 	ex := &Executor{
-		cfg: &Config{KeepGoing: true},
-		exit: func(int) {
-			exited = true
-		},
+		cfg:    &Config{KeepGoing: true},
+		ctx:    ctx,
+		cancel: cancel,
 	}
 	rec := NodeRec{UID: "broken", Out: "/ix/store/broken", StartedAt: time.Now(), FinishedAt: time.Now()}
 
@@ -39,7 +38,7 @@ func TestFailNodeKeepsGoingOnlyWithFlag(t *testing.T) {
 		t.Fatal("failed node must propagate failure")
 	}
 
-	if exited {
-		t.Fatal("-k must keep the executor alive after a node failure")
+	if ex.ctx.Err() != nil {
+		t.Fatalf("-k canceled executor: %v", ex.ctx.Err())
 	}
 }

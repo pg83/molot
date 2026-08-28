@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -69,7 +68,7 @@ func dispatchNode(ex *Executor, n *Node) {
 	const maxDelay = 60 * time.Second
 
 	for {
-		cmd := exec.Command(ex.cfg.GornBin, args...)
+		cmd := exec.CommandContext(ex.ctx, ex.cfg.GornBin, args...)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 
 		// gorn ignite in `-- argv` mode reads its own stdin and embeds
@@ -96,6 +95,10 @@ func dispatchNode(ex *Executor, n *Node) {
 			return
 		}
 
+		if ex.ctx.Err() != nil {
+			Throw(ex.ctx.Err())
+		}
+
 		// ProcessState nil means the subprocess never started (fork/exec
 		// failed — "too many open files", ENOMEM, transient spawn errors).
 		// Retry with exp backoff. Real task failures have ProcessState set
@@ -113,7 +116,11 @@ func dispatchNode(ex *Executor, n *Node) {
 			sleep := delay/2 + time.Duration(rand.Int64N(int64(delay)))
 
 			fmt.Fprintln(os.Stderr, clr(clrY, fmt.Sprintf("%s: spawn error (%v), retrying in %v", n.OutDirs[0], err, sleep)))
-			time.Sleep(sleep)
+			select {
+			case <-time.After(sleep):
+			case <-ex.ctx.Done():
+				Throw(ex.ctx.Err())
+			}
 
 			delay *= 2
 
@@ -147,7 +154,7 @@ func dispatchNode(ex *Executor, n *Node) {
 func verifyResult(ex *Executor, n *Node) {
 	key := ex.cfg.ResultObjectKey(n.UID)
 
-	if s3StatExists(context.Background(), ex.cfg.S3Cli, ex.cfg.S3Bucket, key) {
+	if s3StatExists(ex.ctx, ex.cfg.S3Cli, ex.cfg.S3Bucket, key) {
 		return
 	}
 
