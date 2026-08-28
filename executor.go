@@ -33,8 +33,6 @@ const MaxConcurrentDispatches = 100
 type Executor struct {
 	g           *Graph
 	cfg         *Config
-	ctx         context.Context
-	cancel      context.CancelFunc
 	cache       *Cache
 	byOut       map[string]*Node
 	futures     map[string]*future
@@ -42,20 +40,19 @@ type Executor struct {
 	total       atomic.Uint64
 	ledger      *Ledger
 	dispatchSem chan struct{}
+	exit        func(int)
 }
 
 func newExecutor(g *Graph, cfg *Config, ledger *Ledger) *Executor {
-	ctx, cancel := context.WithCancel(context.Background())
 	ex := &Executor{
 		g:           g,
 		cfg:         cfg,
-		ctx:         ctx,
-		cancel:      cancel,
 		cache:       openCache(cfg.CacheFile),
 		byOut:       map[string]*Node{},
 		futures:     map[string]*future{},
 		ledger:      ledger,
 		dispatchSem: make(chan struct{}, MaxConcurrentDispatches),
+		exit:        os.Exit,
 	}
 
 	for i := range g.Nodes {
@@ -122,24 +119,11 @@ func (ex *Executor) visitAll(outs []string) []bool {
 }
 
 func (ex *Executor) executeNode(n *Node) bool {
-	if !ex.cfg.KeepGoing && ex.ctx.Err() != nil {
-		return true
-	}
-
 	guid := n.UID
 	out := n.OutDirs[0]
 	rec := NodeRec{UID: guid, Out: out, StartedAt: time.Now()}
 
-	cached := ex.cache.Has(guid)
-	if !cached {
-		cached = s3StatExists(ex.ctx, ex.cfg.S3Cli, ex.cfg.S3Bucket, ex.cfg.ResultObjectKey(guid))
-	}
-
-	if !ex.cfg.KeepGoing && ex.ctx.Err() != nil {
-		return true
-	}
-
-	if cached {
+	if ex.cache.Has(guid) || s3StatExists(context.Background(), ex.cfg.S3Cli, ex.cfg.S3Bucket, ex.cfg.ResultObjectKey(guid)) {
 		ex.cache.Add(guid)
 
 		rec.FinishedAt = time.Now()
@@ -196,13 +180,6 @@ func (ex *Executor) executeNode(n *Node) bool {
 	rec.FinishedAt = time.Now()
 
 	if exc != nil {
-		// Another node already supplied the direct failure.  Its cancel
-		// kills our local gorn waiter; do not misreport that cancellation
-		// as a second package failure.
-		if !ex.cfg.KeepGoing && ex.ctx.Err() != nil {
-			return true
-		}
-
 		return ex.failNode(rec, out, exc)
 	}
 
@@ -222,7 +199,7 @@ func (ex *Executor) failNode(rec NodeRec, out string, exc *Exception) bool {
 	fmt.Fprintln(os.Stderr, clr(clrR, "node failed: "+exc.Error()))
 
 	if !ex.cfg.KeepGoing {
-		ex.cancel()
+		ex.exit(2)
 	}
 
 	return true
