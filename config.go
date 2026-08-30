@@ -51,7 +51,7 @@ type Config struct {
 	CacheFile string     `json:"cache_file,omitempty"`
 	Dump      bool       `json:"dump,omitempty"`
 	Quiet     bool       `json:"quiet,omitempty"`
-	KeepGoing bool       `json:"-"` // CLI-only: -k
+	KeepGoing bool       `json:"-"` // runtime-only: IX_KEEP_GOING=yes
 	UID       string     `json:"-"` // not meaningful in a config file; runtime-only
 	S3Cli     *s3.Client `json:"-"` // initialized in validate()
 }
@@ -77,7 +77,6 @@ type cliOpts struct {
 	cacheFile string
 	dump      bool
 	quiet     bool
-	keepGoing bool
 	uid       string
 }
 
@@ -100,7 +99,6 @@ func parseCLI(args []string) (*cliOpts, *flag.FlagSet) {
 	fs.StringVar(&o.cacheFile, "cache", "", "local success-cache file: one gorn GUID per line; nodes whose GUID is present are skipped (env MOLOT_CACHE)")
 	fs.BoolVar(&o.dump, "dump", false, "dump each generated wrap script to stderr (env MOLOT_DUMP)")
 	fs.BoolVar(&o.quiet, "quiet", false, "suppress per-task stream, print only on failure (env MOLOT_QUIET)")
-	fs.BoolVar(&o.keepGoing, "k", false, "keep going after node failures (default: exit on the first failure)")
 	fs.StringVar(&o.uid, "uid", "", "run only the node with this uid, skipping dep traversal (for debugging)")
 
 	Throw(fs.Parse(args))
@@ -170,8 +168,7 @@ func loadConfig(args []string) *Config {
 	c.CacheFile = setFromFlagStr(fs, "cache", c.CacheFile, o.cacheFile)
 	c.Dump = setFromFlagBool(fs, "dump", c.Dump, o.dump)
 	c.Quiet = setFromFlagBool(fs, "quiet", c.Quiet, o.quiet)
-	c.KeepGoing = o.keepGoing // CLI-only: fail-fast unless -k was explicit.
-	c.UID = o.uid             // CLI-only
+	c.UID = o.uid // CLI-only
 
 	// Defaults.
 	if c.AWSRegion == "" {
@@ -244,6 +241,8 @@ func overlayFromEnv(c *Config) {
 	if os.Getenv("MOLOT_QUIET") != "" {
 		c.Quiet = true
 	}
+
+	c.KeepGoing = os.Getenv("IX_KEEP_GOING") == "yes"
 }
 
 func validate(c *Config) {

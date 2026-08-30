@@ -25,7 +25,7 @@ func TestFailNodeExitsByDefault(t *testing.T) {
 	}
 }
 
-func TestFailNodeKeepsGoingOnlyWithFlag(t *testing.T) {
+func TestFailNodeKeepsGoingWithIXEnv(t *testing.T) {
 	exited := false
 	ex := &Executor{
 		cfg: &Config{KeepGoing: true},
@@ -40,6 +40,6 @@ func TestFailNodeKeepsGoingOnlyWithFlag(t *testing.T) {
 	}
 
 	if exited {
-		t.Fatal("-k must keep the executor alive after a node failure")
+		t.Fatal("IX_KEEP_GOING=yes must keep the executor alive after a node failure")
 	}
 }

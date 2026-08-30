@@ -19,13 +19,13 @@ export AWS_SECRET_ACCESS_KEY=...
 cd path/to/ix && IX_DUMP_GRAPH=1 IX_FLAGS='stalix=' ./ix build lib/c | molot
 
 # Continue independent branches after failures (default is fail-fast):
-cd path/to/ix && IX_DUMP_GRAPH=1 IX_FLAGS='stalix=' ./ix build set/ci | molot -k
+cd path/to/ix && IX_DUMP_GRAPH=1 IX_FLAGS='stalix=' ./ix build set/ci | IX_KEEP_GOING=yes molot
 ```
 
 Molot exits with status 2 as soon as the first direct node failure is
 reported. Already-running remote gorn tasks may finish and populate the
 content-addressed cache, but Molot stops waiting for the rest of the graph.
-Pass `-k` explicitly to keep traversing independent branches and report all
+Set `IX_KEEP_GOING=yes` to keep traversing independent branches and report all
 failures plus nodes broken by failed dependencies.
 
 Debug the generated wrap scripts without touching gorn:
@@ -48,6 +48,7 @@ MOLOT_GORN=/bin/true MOLOT_DUMP=1 ./molot < graph.json
 | `MOLOT_DUMP` | no | if set, prints each node's wrap script to stderr before dispatching |
 | `MOLOT_QUIET` | no | if set, don't stream per-node `gorn ignite` stdout/stderr; only dump them if a node fails |
 | `MOLOT_CACHE` | no | path to a success-cache file (one GUID per line). Nodes whose GUID is in the file are skipped entirely — no gorn call, no dep traversal. Written on every successful dispatch. Same path via `--cache`. |
+| `IX_KEEP_GOING` | no | exact value `yes` continues independent graph branches after failures; anything else is fail-fast |
 
 ## Graph format
 
