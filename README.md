@@ -34,6 +34,20 @@ Debug the generated wrap scripts without touching gorn:
 MOLOT_GORN=/bin/true MOLOT_DUMP=1 ./molot < graph.json
 ```
 
+Serve the shared package cache to local IX executors:
+
+```sh
+S3_BUCKET=molot S3_ENDPOINT=http://minio:9000 \
+  AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
+  molot cache --listen 0.0.0.0:8054
+```
+
+`POST /v1/resolve` accepts a JSON list of node uids and returns the
+sub-list present in `s3://cix/complete`. `GET /v1/blob/<uid>` streams
+`s3://$S3_BUCKET/molot/<uid>/result.zstd`. The uid index is fetched as
+one object and cached in memory for 30 seconds; blob bodies are never
+cached by the service.
+
 ## Environment
 
 | Variable | Required | Purpose |
