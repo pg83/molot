@@ -52,6 +52,7 @@ func TestCacheResolveUsesBatchIndexAndMemoryCache(t *testing.T) {
 		"cix/complete": []byte("one\nthree\n"),
 	}}
 	srv := newTestCacheSrv(fake)
+	srv.refreshIndex(context.Background())
 
 	for range 2 {
 		req := httptest.NewRequest(http.MethodPost, "/v1/resolve", strings.NewReader(`["one","two","three"]`))

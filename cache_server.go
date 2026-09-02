@@ -34,9 +34,8 @@ type cacheSrv struct {
 	indexKey    string
 	indexTTL    time.Duration
 
-	mu        sync.Mutex
-	index     map[string]struct{}
-	refreshed time.Time
+	mu    sync.RWMutex
+	index map[string]struct{}
 }
 
 func envDefault(name, fallback string) string {
@@ -52,7 +51,7 @@ func cacheMain(args []string) {
 	listen := fs.String("listen", "", "HTTP listen address, e.g. 0.0.0.0:8054")
 	indexBucket := fs.String("index-bucket", envDefault("MOLOT_CACHE_INDEX_BUCKET", "cix"), "S3 bucket containing the uid index")
 	indexKey := fs.String("index-key", envDefault("MOLOT_CACHE_INDEX_KEY", "complete"), "S3 object containing one uid per line")
-	indexTTL := fs.Duration("index-ttl", 30*time.Second, "in-memory uid index refresh interval")
+	indexTTL := fs.Duration("index-ttl", 30*time.Second, "background uid index refresh interval")
 
 	Throw(fs.Parse(args))
 
@@ -64,8 +63,8 @@ func cacheMain(args []string) {
 		ThrowFmt("cache: --index-bucket and --index-key must not be empty")
 	}
 
-	if *indexTTL < 0 {
-		ThrowFmt("cache: --index-ttl must not be negative")
+	if *indexTTL <= 0 {
+		ThrowFmt("cache: --index-ttl must be positive")
 	}
 
 	cfg := loadS3Config()
@@ -77,6 +76,11 @@ func cacheMain(args []string) {
 		indexKey:    *indexKey,
 		indexTTL:    *indexTTL,
 	}
+	refreshCtx, stopRefresh := context.WithCancel(context.Background())
+	defer stopRefresh()
+
+	srv.refreshIndex(refreshCtx)
+	go srv.refreshLoop(refreshCtx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/resolve", srv.handleResolve)
@@ -94,6 +98,7 @@ func cacheMain(args []string) {
 
 		sig := <-sigs
 		fmt.Fprintln(os.Stderr, "molot cache: signal:", sig)
+		stopRefresh()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -131,7 +136,7 @@ func (s *cacheSrv) handleResolve(w http.ResponseWriter, r *http.Request) {
 			ThrowHTTP(http.StatusBadRequest, "bad JSON uid list: %v", err)
 		}
 
-		index := s.cachedIndex(r.Context())
+		index := s.indexSnapshot()
 		available := make([]string, 0, len(requested))
 
 		for _, uid := range requested {
@@ -159,27 +164,13 @@ func (s *cacheSrv) handleResolve(w http.ResponseWriter, r *http.Request) {
 	sendCacheException(w, r, exc)
 }
 
-func (s *cacheSrv) cachedIndex(ctx context.Context) map[string]struct{} {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.index != nil && time.Since(s.refreshed) < s.indexTTL {
-		return s.index
-	}
-
+func (s *cacheSrv) loadIndex(ctx context.Context) map[string]struct{} {
 	resp, err := s.s3.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.indexBucket),
 		Key:    aws.String(s.indexKey),
 	})
 
 	if err != nil {
-		if isNotFound(err) {
-			s.index = map[string]struct{}{}
-			s.refreshed = time.Now()
-
-			return s.index
-		}
-
 		Throw(err)
 	}
 
@@ -196,10 +187,43 @@ func (s *cacheSrv) cachedIndex(ctx context.Context) map[string]struct{} {
 		}
 	}
 
-	s.index = index
-	s.refreshed = time.Now()
+	return index
+}
 
-	return s.index
+func (s *cacheSrv) refreshIndex(ctx context.Context) {
+	index := s.loadIndex(ctx)
+
+	s.mu.Lock()
+	s.index = index
+	s.mu.Unlock()
+}
+
+func (s *cacheSrv) indexSnapshot() map[string]struct{} {
+	s.mu.RLock()
+	index := s.index
+	s.mu.RUnlock()
+
+	return index
+}
+
+func (s *cacheSrv) refreshLoop(ctx context.Context) {
+	ticker := time.NewTicker(s.indexTTL)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			exc := Try(func() {
+				s.refreshIndex(ctx)
+			})
+
+			if exc != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, "molot cache: index refresh failed, keeping previous index:", exc)
+			}
+		}
+	}
 }
 
 func validCacheUID(uid string) bool {
