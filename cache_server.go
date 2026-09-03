@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +34,7 @@ type cacheSrv struct {
 	indexBucket string
 	indexKey    string
 	indexTTL    time.Duration
+	indexPath   string
 
 	mu    sync.RWMutex
 	index map[string]struct{}
@@ -75,11 +77,12 @@ func cacheMain(args []string) {
 		indexBucket: *indexBucket,
 		indexKey:    *indexKey,
 		indexTTL:    *indexTTL,
+		indexPath:   filepath.Join(os.TempDir(), "complete"),
 	}
 	refreshCtx, stopRefresh := context.WithCancel(context.Background())
 	defer stopRefresh()
 
-	srv.refreshIndex(refreshCtx)
+	srv.initializeIndex(refreshCtx)
 	go srv.refreshLoop(refreshCtx)
 
 	mux := http.NewServeMux()
@@ -164,7 +167,7 @@ func (s *cacheSrv) handleResolve(w http.ResponseWriter, r *http.Request) {
 	sendCacheException(w, r, exc)
 }
 
-func (s *cacheSrv) loadIndex(ctx context.Context) map[string]struct{} {
+func (s *cacheSrv) loadIndex(ctx context.Context) []byte {
 	resp, err := s.s3.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.indexBucket),
 		Key:    aws.String(s.indexKey),
@@ -176,7 +179,10 @@ func (s *cacheSrv) loadIndex(ctx context.Context) map[string]struct{} {
 
 	defer resp.Body.Close()
 
-	data := Throw2(io.ReadAll(resp.Body))
+	return Throw2(io.ReadAll(resp.Body))
+}
+
+func parseIndex(data []byte) map[string]struct{} {
 	index := make(map[string]struct{}, len(data)/24)
 
 	for _, line := range strings.Split(string(data), "\n") {
@@ -190,12 +196,57 @@ func (s *cacheSrv) loadIndex(ctx context.Context) map[string]struct{} {
 	return index
 }
 
-func (s *cacheSrv) refreshIndex(ctx context.Context) {
-	index := s.loadIndex(ctx)
+func writeIndex(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".complete.*")
+
+	if err != nil {
+		return err
+	}
+
+	tmp := f.Name()
+	defer os.Remove(tmp)
+
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+
+		return err
+	}
+
+	if err := f.Close(); err != nil {
+		return err
+	}
+
+	return os.Rename(tmp, path)
+}
+
+func (s *cacheSrv) setIndex(data []byte) {
+	index := parseIndex(data)
 
 	s.mu.Lock()
 	s.index = index
 	s.mu.Unlock()
+}
+
+func (s *cacheSrv) initializeIndex(ctx context.Context) {
+	data, err := os.ReadFile(s.indexPath)
+
+	if err == nil {
+		s.setIndex(data)
+
+		return
+	}
+
+	if !errors.Is(err, os.ErrNotExist) {
+		Throw(err)
+	}
+
+	s.refreshIndex(ctx)
+}
+
+func (s *cacheSrv) refreshIndex(ctx context.Context) {
+	data := s.loadIndex(ctx)
+	Throw(writeIndex(s.indexPath, data))
+	s.setIndex(data)
 }
 
 func (s *cacheSrv) indexSnapshot() map[string]struct{} {
