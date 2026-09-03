@@ -196,27 +196,14 @@ func parseIndex(data []byte) map[string]struct{} {
 	return index
 }
 
-func writeIndex(path string, data []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".complete.*")
-
-	if err != nil {
-		return err
-	}
-
+func writeIndex(path string, data []byte) {
+	f := Throw2(os.CreateTemp(filepath.Dir(path), ".complete.*"))
 	tmp := f.Name()
 	defer os.Remove(tmp)
 
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-
-		return err
-	}
-
-	if err := f.Close(); err != nil {
-		return err
-	}
-
-	return os.Rename(tmp, path)
+	Throw2(f.Write(data))
+	Throw(f.Close())
+	Throw(os.Rename(tmp, path))
 }
 
 func (s *cacheSrv) setIndex(data []byte) {
@@ -245,7 +232,7 @@ func (s *cacheSrv) initializeIndex(ctx context.Context) {
 
 func (s *cacheSrv) refreshIndex(ctx context.Context) {
 	data := s.loadIndex(ctx)
-	Throw(writeIndex(s.indexPath, data))
+	writeIndex(s.indexPath, data)
 	s.setIndex(data)
 }
 
