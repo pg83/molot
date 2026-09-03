@@ -61,7 +61,7 @@ cached by the service.
 | `MOLOT_GORN` | no | path to `gorn` binary; default `gorn` |
 | `MOLOT_DUMP` | no | if set, prints each node's wrap script to stderr before dispatching |
 | `MOLOT_QUIET` | no | if set, don't stream per-node `gorn ignite` stdout/stderr; only dump them if a node fails |
-| `MOLOT_CACHE` | no | path to a success-cache file (one GUID per line). Nodes whose GUID is in the file are skipped entirely — no gorn call, no dep traversal. Written on every successful dispatch. Same path via `--cache`. |
+| `MOLOT_RESOLVE` | no | comma-separated `molot cache` endpoints; at startup all graph uids are batch-resolved via `/v1/resolve` and hits are skipped entirely — no gorn call, no dep traversal. Falls back to `IX_PACKAGE_CACHE` when unset. Misses are backstopped by a per-node S3 stat. Same list via `--resolve`. |
 | `IX_KEEP_GOING` | no | exact value `yes` continues independent graph branches after failures; anything else is fail-fast |
 
 ## Graph format

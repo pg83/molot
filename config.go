@@ -48,7 +48,7 @@ type Config struct {
 	AWSRegion string     `json:"aws_region,omitempty"`
 	S3Root    string     `json:"s3_root,omitempty"`
 	FullSlots int        `json:"full_slots,omitempty"`
-	CacheFile string     `json:"cache_file,omitempty"`
+	Resolve   string     `json:"resolve,omitempty"`
 	Dump      bool       `json:"dump,omitempty"`
 	Quiet     bool       `json:"quiet,omitempty"`
 	KeepGoing bool       `json:"-"` // runtime-only: IX_KEEP_GOING=yes
@@ -74,7 +74,7 @@ type cliOpts struct {
 	awsRegion string
 	s3Root    string
 	fullSlots int
-	cacheFile string
+	resolve   string
 	dump      bool
 	quiet     bool
 	uid       string
@@ -96,7 +96,7 @@ func parseCLI(args []string) (*cliOpts, *flag.FlagSet) {
 	fs.StringVar(&o.gornBin, "gorn", "", "path to gorn binary (env MOLOT_GORN; default \"gorn\")")
 	fs.StringVar(&o.s3Root, "s3-root", "", "S3 key prefix for task artifacts (env MOLOT_S3_ROOT; default \"molot\")")
 	fs.IntVar(&o.fullSlots, "full-slots", 0, "slots requested from gorn for pool=full nodes; all other nodes request 1 (env MOLOT_FULL_SLOTS; default 1)")
-	fs.StringVar(&o.cacheFile, "cache", "", "local success-cache file: one gorn GUID per line; nodes whose GUID is present are skipped (env MOLOT_CACHE)")
+	fs.StringVar(&o.resolve, "resolve", "", "comma-separated molot cache endpoints to batch-resolve completed uids (env MOLOT_RESOLVE, else IX_PACKAGE_CACHE)")
 	fs.BoolVar(&o.dump, "dump", false, "dump each generated wrap script to stderr (env MOLOT_DUMP)")
 	fs.BoolVar(&o.quiet, "quiet", false, "suppress per-task stream, print only on failure (env MOLOT_QUIET)")
 	fs.StringVar(&o.uid, "uid", "", "run only the node with this uid, skipping dep traversal (for debugging)")
@@ -165,7 +165,7 @@ func loadConfig(args []string) *Config {
 	c.GornBin = setFromFlagStr(fs, "gorn", c.GornBin, o.gornBin)
 	c.S3Root = setFromFlagStr(fs, "s3-root", c.S3Root, o.s3Root)
 	c.FullSlots = setFromFlagInt(fs, "full-slots", c.FullSlots, o.fullSlots)
-	c.CacheFile = setFromFlagStr(fs, "cache", c.CacheFile, o.cacheFile)
+	c.Resolve = setFromFlagStr(fs, "resolve", c.Resolve, o.resolve)
 	c.Dump = setFromFlagBool(fs, "dump", c.Dump, o.dump)
 	c.Quiet = setFromFlagBool(fs, "quiet", c.Quiet, o.quiet)
 	c.UID = o.uid // CLI-only
@@ -221,8 +221,10 @@ func overlayFromEnv(c *Config) {
 		c.GornBin = v
 	}
 
-	if v := os.Getenv("MOLOT_CACHE"); v != "" {
-		c.CacheFile = v
+	if v := os.Getenv("MOLOT_RESOLVE"); v != "" {
+		c.Resolve = v
+	} else if v := os.Getenv("IX_PACKAGE_CACHE"); v != "" {
+		c.Resolve = v
 	}
 
 	if v := os.Getenv("MOLOT_S3_ROOT"); v != "" {

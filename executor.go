@@ -43,11 +43,21 @@ type Executor struct {
 	exit        func(int)
 }
 
+func graphUIDs(g *Graph) []string {
+	uids := make([]string, 0, len(g.Nodes))
+
+	for i := range g.Nodes {
+		uids = append(uids, g.Nodes[i].UID)
+	}
+
+	return uids
+}
+
 func newExecutor(g *Graph, cfg *Config, ledger *Ledger) *Executor {
 	ex := &Executor{
 		g:           g,
 		cfg:         cfg,
-		cache:       openCache(cfg.CacheFile),
+		cache:       newCache(resolveCompleted(cfg.Resolve, graphUIDs(g))),
 		byOut:       map[string]*Node{},
 		futures:     map[string]*future{},
 		ledger:      ledger,
