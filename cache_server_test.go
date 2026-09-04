@@ -47,6 +47,7 @@ func newTestCacheSrv(s3cli objectGetter, indexPath string) *cacheSrv {
 		indexKey:    "complete",
 		indexTTL:    time.Minute,
 		indexPath:   indexPath,
+		stats:       newStatsQueue(),
 	}
 }
 

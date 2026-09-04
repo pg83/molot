@@ -48,6 +48,14 @@ sub-list present in `s3://cix/complete`. `GET /v1/blob/<uid>` streams
 one object and cached in memory for 30 seconds; blob bodies are never
 cached by the service.
 
+Every resolve request's uid list is also queued to a single writer
+goroutine which flushes whatever has accumulated as a jsonline chunk to
+`s3://$S3_BUCKET/queue/<unix-ts>-<host>-<rand>` (one JSON-encoded uid
+per line). `molot stats` — meant to run periodically as a singleton job
+— folds all chunks into `s3://$S3_BUCKET/stats`, a JSON dict of
+`uid -> last-use unix timestamp`, then deletes the consumed chunks.
+Cleanup tooling will consume `stats` later.
+
 ## Environment
 
 | Variable | Required | Purpose |

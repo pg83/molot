@@ -49,6 +49,10 @@ func main() {
 			runSubcommand(func() { cacheMain(os.Args[2:]) })
 
 			return
+		case "stats":
+			runSubcommand(func() { statsMain(os.Args[2:]) })
+
+			return
 		case "fetch":
 			runSubcommand(func() { fetchMain(os.Args[2:]) })
 

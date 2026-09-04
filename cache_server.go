@@ -38,6 +38,8 @@ type cacheSrv struct {
 
 	mu    sync.RWMutex
 	index map[string]struct{}
+
+	stats *statsQueue
 }
 
 func envDefault(name, fallback string) string {
@@ -78,7 +80,9 @@ func cacheMain(args []string) {
 		indexKey:    *indexKey,
 		indexTTL:    *indexTTL,
 		indexPath:   filepath.Join(os.TempDir(), "complete"),
+		stats:       newStatsQueue(),
 	}
+	go srv.statsLoop(cfg.S3Cli, cfg.S3Bucket)
 	refreshCtx, stopRefresh := context.WithCancel(context.Background())
 	defer stopRefresh()
 
@@ -138,6 +142,8 @@ func (s *cacheSrv) handleResolve(w http.ResponseWriter, r *http.Request) {
 		if err := dec.Decode(&requested); err != nil {
 			ThrowHTTP(http.StatusBadRequest, "bad JSON uid list: %v", err)
 		}
+
+		s.stats.put(requested)
 
 		index := s.indexSnapshot()
 		available := make([]string, 0, len(requested))
