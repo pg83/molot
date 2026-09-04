@@ -31,7 +31,7 @@ failures plus nodes broken by failed dependencies.
 Debug the generated wrap scripts without touching gorn:
 
 ```sh
-MOLOT_GORN=/bin/true MOLOT_DUMP=1 ./molot < graph.json
+MOLOT_RESOLVE=127.0.0.1:1 MOLOT_GORN=/bin/true MOLOT_DUMP=1 ./molot < graph.json
 ```
 
 Serve the shared package cache to local IX executors:
@@ -69,7 +69,7 @@ Cleanup tooling will consume `stats` later.
 | `MOLOT_GORN` | no | path to `gorn` binary; default `gorn` |
 | `MOLOT_DUMP` | no | if set, prints each node's wrap script to stderr before dispatching |
 | `MOLOT_QUIET` | no | if set, don't stream per-node `gorn ignite` stdout/stderr; only dump them if a node fails |
-| `MOLOT_RESOLVE` | no | comma-separated `molot cache` endpoints; at startup all graph uids are batch-resolved via `/v1/resolve` and hits are skipped entirely — no gorn call, no dep traversal. Falls back to `IX_PACKAGE_CACHE` when unset. Misses are backstopped by a per-node S3 stat. Same list via `--resolve`. |
+| `MOLOT_RESOLVE` | yes (executor) | comma-separated `molot cache` endpoints; at startup all graph uids are batch-resolved via `/v1/resolve` and hits are skipped entirely — no gorn call, no dep traversal. Falls back to `IX_PACKAGE_CACHE` when unset; the graph executor refuses to start with an empty list. Misses are backstopped by a per-node S3 stat. Same list via `--resolve`. |
 | `IX_KEEP_GOING` | no | exact value `yes` continues independent graph branches after failures; anything else is fail-fast |
 
 ## Graph format

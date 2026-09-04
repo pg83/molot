@@ -93,6 +93,14 @@ func runSubcommand(fn func()) {
 
 func run() {
 	cfg := loadConfig(os.Args[1:])
+
+	// A silently empty endpoint list once cost thousands of per-node S3
+	// stats every run before anyone noticed. Executing a graph without
+	// the shared index is a misconfiguration, not a degraded mode.
+	if len(parseResolveEndpoints(cfg.Resolve)) == 0 {
+		ThrowFmt("no cache resolve endpoints: set MOLOT_RESOLVE / IX_PACKAGE_CACHE or pass --resolve")
+	}
+
 	g := readGraph(os.Stdin)
 
 	if cfg.UID != "" {
