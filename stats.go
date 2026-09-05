@@ -218,20 +218,17 @@ func statsMain(args []string) {
 }
 
 func deleteChunks(ctx context.Context, cfg *Config, chunks []string) {
-	deletable := make([]types.ObjectIdentifier, 0, len(chunks))
-
+	// MinIO rejects the SDK's batch DeleteObjects with MissingContentMD5
+	// (the SDK stopped sending that header); per-key deletes are plenty
+	// at this cadence.
 	for _, key := range chunks {
-		if _, err := parseChunkTS(key); err == nil {
-			deletable = append(deletable, types.ObjectIdentifier{Key: aws.String(key)})
+		if _, err := parseChunkTS(key); err != nil {
+			continue
 		}
-	}
 
-	for start := 0; start < len(deletable); start += 1000 {
-		end := min(start+1000, len(deletable))
-
-		Throw2(cfg.S3Cli.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		Throw2(cfg.S3Cli.DeleteObject(ctx, &s3.DeleteObjectInput{
 			Bucket: aws.String(cfg.S3Bucket),
-			Delete: &types.Delete{Objects: deletable[start:end]},
+			Key:    aws.String(key),
 		}))
 	}
 }
