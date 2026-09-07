@@ -37,7 +37,7 @@ type cacheSrv struct {
 	indexPath   string
 
 	mu    sync.RWMutex
-	index map[string]struct{}
+	index map[string]string
 
 	stats *statsQueue
 }
@@ -91,6 +91,7 @@ func cacheMain(args []string) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/resolve", srv.handleResolve)
+	mux.HandleFunc("/v2/resolve", srv.handleResolveV2)
 	mux.HandleFunc("/v1/blob/", srv.handleBlob)
 
 	server := &http.Server{
@@ -129,7 +130,40 @@ func sendCacheException(w http.ResponseWriter, r *http.Request, e *Exception) {
 	httpError(w, http.StatusInternalServerError, e.Error())
 }
 
+// handleResolveV2 answers with a uid -> md5 object instead of v1's
+// bare uid list, so clients can verify fetched blobs. The hash is ""
+// when the index has no attestation for that uid.
+func (s *cacheSrv) handleResolveV2(w http.ResponseWriter, r *http.Request) {
+	s.serveResolve(w, r, func(w http.ResponseWriter, requested []string, index map[string]string) {
+		available := make(map[string]string, len(requested))
+
+		for _, uid := range requested {
+			if md5, ok := index[uid]; ok {
+				available[uid] = md5
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		Throw(json.NewEncoder(w).Encode(available))
+	})
+}
+
 func (s *cacheSrv) handleResolve(w http.ResponseWriter, r *http.Request) {
+	s.serveResolve(w, r, func(w http.ResponseWriter, requested []string, index map[string]string) {
+		available := make([]string, 0, len(requested))
+
+		for _, uid := range requested {
+			if _, ok := index[uid]; ok {
+				available = append(available, uid)
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		Throw(json.NewEncoder(w).Encode(available))
+	})
+}
+
+func (s *cacheSrv) serveResolve(w http.ResponseWriter, r *http.Request, respond func(http.ResponseWriter, []string, map[string]string)) {
 	exc := Try(func() {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
@@ -144,18 +178,7 @@ func (s *cacheSrv) handleResolve(w http.ResponseWriter, r *http.Request) {
 		}
 
 		s.stats.put(requested)
-
-		index := s.indexSnapshot()
-		available := make([]string, 0, len(requested))
-
-		for _, uid := range requested {
-			if _, ok := index[uid]; ok {
-				available = append(available, uid)
-			}
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		Throw(json.NewEncoder(w).Encode(available))
+		respond(w, requested, s.indexSnapshot())
 	})
 
 	if exc == nil {
@@ -188,14 +211,20 @@ func (s *cacheSrv) loadIndex(ctx context.Context) []byte {
 	return Throw2(io.ReadAll(resp.Body))
 }
 
-func parseIndex(data []byte) map[string]struct{} {
-	index := make(map[string]struct{}, len(data)/24)
+// parseIndex reads "uid" or "uid <md5>" lines; the hash column comes
+// from the complete job's recursive listing (single-part ETag == MD5)
+// and is empty for entries the listing could not attest.
+func parseIndex(data []byte) map[string]string {
+	index := make(map[string]string, len(data)/24)
 
 	for _, line := range strings.Split(string(data), "\n") {
-		uid := strings.TrimSpace(line)
+		fields := strings.Fields(line)
 
-		if uid != "" {
-			index[uid] = struct{}{}
+		switch len(fields) {
+		case 1:
+			index[fields[0]] = ""
+		case 2:
+			index[fields[0]] = fields[1]
 		}
 	}
 
@@ -242,7 +271,7 @@ func (s *cacheSrv) refreshIndex(ctx context.Context) {
 	s.setIndex(data)
 }
 
-func (s *cacheSrv) indexSnapshot() map[string]struct{} {
+func (s *cacheSrv) indexSnapshot() map[string]string {
 	s.mu.RLock()
 	index := s.index
 	s.mu.RUnlock()

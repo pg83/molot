@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -74,6 +75,42 @@ func TestCacheResolveUsesBatchIndexAndMemoryCache(t *testing.T) {
 
 	if fake.gets != 1 {
 		t.Fatalf("index GETs=%d, want 1", fake.gets)
+	}
+}
+
+func TestCacheResolveV2ReturnsHashesFromHashedIndex(t *testing.T) {
+	fake := &fakeObjectGetter{objects: map[string][]byte{
+		"cix/complete": []byte("one d41d8cd98f00b204e9800998ecf8427e\nthree\n"),
+	}}
+	srv := newTestCacheSrv(fake, filepath.Join(t.TempDir(), "complete"))
+	srv.refreshIndex(context.Background())
+
+	req := httptest.NewRequest(http.MethodPost, "/v2/resolve", strings.NewReader(`["one","two","three"]`))
+	res := httptest.NewRecorder()
+	srv.handleResolveV2(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	var got map[string]string
+
+	if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{"one": "d41d8cd98f00b204e9800998ecf8427e", "three": ""}
+
+	if len(got) != len(want) || got["one"] != want["one"] || got["three"] != want["three"] {
+		t.Fatalf("resolve v2=%v", got)
+	}
+
+	// v1 must keep serving the plain list off the same hashed index.
+	res = httptest.NewRecorder()
+	srv.handleResolve(res, httptest.NewRequest(http.MethodPost, "/v1/resolve", strings.NewReader(`["one","three"]`)))
+
+	if got := strings.TrimSpace(res.Body.String()); got != `["one","three"]` {
+		t.Fatalf("resolve v1=%s", got)
 	}
 }
 
