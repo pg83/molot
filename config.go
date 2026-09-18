@@ -274,3 +274,40 @@ func validate(c *Config) {
 
 	c.S3Cli = newS3Client(c)
 }
+
+// loadS3Config reads S3-only env vars and initializes the S3 client for
+// subcommands that do not dispatch tasks to gorn.
+func loadS3Config() *Config {
+	c := &Config{
+		S3Bucket:  os.Getenv("S3_BUCKET"),
+		S3Endpt:   os.Getenv("S3_ENDPOINT"),
+		AWSKey:    os.Getenv("AWS_ACCESS_KEY_ID"),
+		AWSSecret: os.Getenv("AWS_SECRET_ACCESS_KEY"),
+		AWSRegion: os.Getenv("AWS_REGION"),
+		S3Root:    os.Getenv("MOLOT_S3_ROOT"),
+	}
+
+	if c.AWSRegion == "" {
+		c.AWSRegion = "us-east-1"
+	}
+
+	if c.S3Root == "" {
+		c.S3Root = "molot"
+	}
+
+	if c.S3Bucket == "" {
+		ThrowFmt("S3_BUCKET is required")
+	}
+
+	if c.S3Endpt == "" {
+		ThrowFmt("S3_ENDPOINT is required")
+	}
+
+	if c.AWSKey == "" || c.AWSSecret == "" {
+		ThrowFmt("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required")
+	}
+
+	c.S3Cli = newS3Client(c)
+
+	return c
+}
