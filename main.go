@@ -53,10 +53,6 @@ func main() {
 			runSubcommand(func() { statsMain(os.Args[2:]) })
 
 			return
-		case "push":
-			runSubcommand(func() { pushMain(os.Args[2:]) })
-
-			return
 		case "exec":
 			runSubcommand(func() { execMain(os.Args[2:]) })
 
