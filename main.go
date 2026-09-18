@@ -75,9 +75,7 @@ func main() {
 }
 
 func runSubcommand(fn func()) {
-	exc := Try(fn)
-
-	exc.Catch(func(e *Exception) {
+	Try(fn).Catch(func(e *Exception) {
 		fmt.Fprintln(os.Stderr, clr(clrR, "abort: "+e.Error()))
 		os.Exit(1)
 	})
@@ -111,7 +109,7 @@ func run() {
 
 	fmt.Fprintln(os.Stderr, "molot: started, ledger key=s3://"+cfg.S3Bucket+"/"+runKey(started))
 
-	exc := Try(func() {
+	Try(func() {
 		uploadLedger(cfg, Run{
 			StartedAt: started,
 			Targets:   g.Targets,
@@ -121,17 +119,13 @@ func run() {
 			Total:     ex.total.Load(),
 			Nodes:     ledger.Snapshot(),
 		})
-	})
-
-	exc.Catch(func(e *Exception) {
+	}).Catch(func(e *Exception) {
 		fmt.Fprintln(os.Stderr, clr(clrY, "ledger initial upload: "+e.Error()))
 	})
 
-	exc = Try(func() {
+	Try(func() {
 		uploadGraph(cfg, started, g)
-	})
-
-	exc.Catch(func(e *Exception) {
+	}).Catch(func(e *Exception) {
 		fmt.Fprintln(os.Stderr, clr(clrY, "graph upload: "+e.Error()))
 	})
 
@@ -167,11 +161,9 @@ func run() {
 		Nodes:     recs,
 	}
 
-	exc = Try(func() {
+	Try(func() {
 		uploadLedger(cfg, r)
-	})
-
-	exc.Catch(func(e *Exception) {
+	}).Catch(func(e *Exception) {
 		fmt.Fprintln(os.Stderr, clr(clrY, "ledger upload: "+e.Error()))
 	})
 
@@ -209,11 +201,9 @@ func heartbeat(cfg *Config, started time.Time, g *Graph, ex *Executor, ledger *L
 				Nodes:     ledger.Snapshot(),
 			}
 
-			exc := Try(func() {
+			Try(func() {
 				uploadLedger(cfg, r)
-			})
-
-			exc.Catch(func(e *Exception) {
+			}).Catch(func(e *Exception) {
 				fmt.Fprintln(os.Stderr, clr(clrY, "ledger heartbeat: "+e.Error()))
 			})
 		}

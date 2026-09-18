@@ -49,42 +49,40 @@ func execMain(args []string) {
 
 	cwd := Throw2(os.Getwd())
 
-	infraExc := Try(func() {
+	Try(func() {
 		setupNamespace(cwd, task)
 		fetchDeps(cfg, cwd, task.InDirs)
+	}).Catch(func(exc *Exception) {
+		fmt.Fprintln(os.Stderr, "molot exec: infra (setup/fetch):", exc.Error())
+		os.Exit(InfraExitCode)
 	})
 
-	if infraExc != nil {
-		fmt.Fprintln(os.Stderr, "molot exec: infra (setup/fetch):", infraExc.Error())
+	Try(func() {
+		Throw(os.Chdir("/"))
+		scriptExit := runCmds(task)
+
+		if scriptExit != 0 {
+			fmt.Fprintln(os.Stderr, "molot exec: script exit", scriptExit)
+			os.Exit(scriptExit)
+		}
+	}).Catch(func(exc *Exception) {
+		fmt.Fprintln(os.Stderr, "molot exec: infra (run):", exc.Error())
 		os.Exit(InfraExitCode)
-	}
+	})
 
-	Throw(os.Chdir("/"))
-
-	scriptExit := runCmds(task)
-
-	if scriptExit != 0 {
-		fmt.Fprintln(os.Stderr, "molot exec: script exit", scriptExit)
-		os.Exit(scriptExit)
-	}
-
-	verifyExc := Try(func() {
+	Try(func() {
 		verifyPredict(task)
-	})
-
-	if verifyExc != nil {
-		fmt.Fprintln(os.Stderr, "molot exec: predict mismatch:", verifyExc.Error())
+	}).Catch(func(exc *Exception) {
+		fmt.Fprintln(os.Stderr, "molot exec: predict mismatch:", exc.Error())
 		os.Exit(1)
-	}
-
-	pushExc := Try(func() {
-		pushOutput(cfg, cwd, task)
 	})
 
-	if pushExc != nil {
-		fmt.Fprintln(os.Stderr, "molot exec: infra (push):", pushExc.Error())
+	Try(func() {
+		pushOutput(cfg, cwd, task)
+	}).Catch(func(exc *Exception) {
+		fmt.Fprintln(os.Stderr, "molot exec: infra (push):", exc.Error())
 		os.Exit(InfraExitCode)
-	}
+	})
 }
 
 func readExecTask(args []string) ExecTask {

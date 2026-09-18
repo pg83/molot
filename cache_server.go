@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -29,6 +30,7 @@ type objectGetter interface {
 
 type cacheSrv struct {
 	s3          objectGetter
+	kv          *blobKV
 	blobBucket  string
 	s3Root      string
 	indexBucket string
@@ -56,6 +58,9 @@ func cacheMain(args []string) {
 	indexBucket := fs.String("index-bucket", envDefault("MOLOT_CACHE_INDEX_BUCKET", "cix"), "S3 bucket containing the uid index")
 	indexKey := fs.String("index-key", envDefault("MOLOT_CACHE_INDEX_KEY", "complete"), "S3 object containing one uid per line")
 	indexTTL := fs.Duration("index-ttl", 30*time.Second, "background uid index refresh interval")
+	kvEndpoint := fs.String("kv-endpoint", os.Getenv("MOLOT_CACHE_KV_ENDPOINT"), "required KV front URL")
+	kvBucket := fs.String("kv-bucket", os.Getenv("MOLOT_CACHE_KV_BUCKET"), "required KV bucket for artifact bytes")
+	kvTimeout := fs.String("kv-timeout", os.Getenv("MOLOT_CACHE_KV_TIMEOUT"), "required positive KV request timeout, as a Go duration")
 
 	Throw(fs.Parse(args))
 
@@ -71,9 +76,15 @@ func cacheMain(args []string) {
 		ThrowFmt("cache: --index-ttl must be positive")
 	}
 
+	if *kvEndpoint == "" || *kvBucket == "" || *kvTimeout == "" {
+		ThrowFmt("cache: --kv-endpoint, --kv-bucket and --kv-timeout are required")
+	}
+
+	kv := newBlobKV(*kvEndpoint, *kvBucket, Throw2(time.ParseDuration(*kvTimeout)))
 	cfg := loadS3Config()
 	srv := &cacheSrv{
 		s3:          cfg.S3Cli,
+		kv:          kv,
 		blobBucket:  cfg.S3Bucket,
 		s3Root:      cfg.S3Root,
 		indexBucket: *indexBucket,
@@ -82,7 +93,8 @@ func cacheMain(args []string) {
 		indexPath:   filepath.Join(os.TempDir(), "complete"),
 		stats:       newStatsQueue(),
 	}
-	go srv.statsLoop(cfg.S3Cli, cfg.S3Bucket)
+	host := Throw2(os.Hostname())
+	go srv.statsLoop(cfg.S3Cli, cfg.S3Bucket, host)
 	refreshCtx, stopRefresh := context.WithCancel(context.Background())
 	defer stopRefresh()
 
@@ -111,7 +123,11 @@ func cacheMain(args []string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		_ = server.Shutdown(ctx)
+		Try(func() {
+			Throw(server.Shutdown(ctx))
+		}).Catch(func(exc *Exception) {
+			fmt.Fprintln(os.Stderr, "molot cache: shutdown:", exc)
+		})
 	}()
 
 	fmt.Fprintf(os.Stderr, "molot cache: listening on %s index=s3://%s/%s blobs=s3://%s/%s/<uid>/result.zstd\n",
@@ -125,6 +141,14 @@ func cacheMain(args []string) {
 }
 
 func sendCacheException(w http.ResponseWriter, r *http.Request, e *Exception) {
+	var he *HTTPError
+
+	if errors.As(e.AsError(), &he) {
+		httpError(w, he.Status, he.Msg)
+
+		return
+	}
+
 	fmt.Fprintf(os.Stderr, "molot cache: %s %s: %s\n", r.Method, r.URL.Path, e.Error())
 
 	httpError(w, http.StatusInternalServerError, e.Error())
@@ -164,7 +188,7 @@ func (s *cacheSrv) handleResolve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *cacheSrv) serveResolve(w http.ResponseWriter, r *http.Request, respond func(http.ResponseWriter, []string, map[string]string)) {
-	exc := Try(func() {
+	Try(func() {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
 			ThrowHTTP(http.StatusMethodNotAllowed, "method not allowed")
@@ -179,33 +203,16 @@ func (s *cacheSrv) serveResolve(w http.ResponseWriter, r *http.Request, respond 
 
 		s.stats.put(requested)
 		respond(w, requested, s.indexSnapshot())
+	}).Catch(func(exc *Exception) {
+		sendCacheException(w, r, exc)
 	})
-
-	if exc == nil {
-		return
-	}
-
-	var he *HTTPError
-
-	if errors.As(exc.AsError(), &he) {
-		httpError(w, he.Status, he.Msg)
-
-		return
-	}
-
-	sendCacheException(w, r, exc)
 }
 
 func (s *cacheSrv) loadIndex(ctx context.Context) []byte {
-	resp, err := s.s3.GetObject(ctx, &s3.GetObjectInput{
+	resp := Throw2(s.s3.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.indexBucket),
 		Key:    aws.String(s.indexKey),
-	})
-
-	if err != nil {
-		Throw(err)
-	}
-
+	}))
 	defer resp.Body.Close()
 
 	return Throw2(io.ReadAll(resp.Body))
@@ -288,13 +295,13 @@ func (s *cacheSrv) refreshLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			exc := Try(func() {
+			Try(func() {
 				s.refreshIndex(ctx)
+			}).Catch(func(exc *Exception) {
+				if ctx.Err() == nil {
+					fmt.Fprintln(os.Stderr, "molot cache: index refresh failed, keeping previous index:", exc)
+				}
 			})
-
-			if exc != nil && ctx.Err() == nil {
-				fmt.Fprintln(os.Stderr, "molot cache: index refresh failed, keeping previous index:", exc)
-			}
 		}
 	}
 }
@@ -304,7 +311,7 @@ func validCacheUID(uid string) bool {
 }
 
 func (s *cacheSrv) handleBlob(w http.ResponseWriter, r *http.Request) {
-	exc := Try(func() {
+	Try(func() {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
 			ThrowHTTP(http.StatusMethodNotAllowed, "method not allowed")
@@ -314,6 +321,14 @@ func (s *cacheSrv) handleBlob(w http.ResponseWriter, r *http.Request) {
 
 		if !validCacheUID(uid) {
 			ThrowHTTP(http.StatusBadRequest, "bad uid")
+		}
+
+		if data := s.kv.get(r.Context(), uid); data != nil {
+			w.Header().Set("Content-Type", "application/zstd")
+			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+			Throw2(w.Write(data))
+
+			return
 		}
 
 		if _, indexed := s.indexSnapshot()[uid]; !indexed {
@@ -336,26 +351,34 @@ func (s *cacheSrv) handleBlob(w http.ResponseWriter, r *http.Request) {
 
 		defer resp.Body.Close()
 
+		var body io.Reader = resp.Body
+
+		if resp.ContentLength == nil || *resp.ContentLength <= maxBlobKVSize {
+			data := Throw2(io.ReadAll(io.LimitReader(resp.Body, maxBlobKVSize+1)))
+
+			if len(data) <= maxBlobKVSize {
+				if resp.ContentLength != nil && int64(len(data)) != *resp.ContentLength {
+					Throw(io.ErrUnexpectedEOF)
+				}
+
+				Try(func() {
+					s.kv.put(r.Context(), uid, data)
+				}).Catch(func(exc *Exception) {
+					fmt.Fprintln(os.Stderr, "molot cache: KV PUT failed:", exc)
+				})
+			}
+
+			body = io.MultiReader(bytes.NewReader(data), resp.Body)
+		}
+
 		w.Header().Set("Content-Type", "application/zstd")
 
 		if resp.ContentLength != nil {
 			w.Header().Set("Content-Length", strconv.FormatInt(*resp.ContentLength, 10))
 		}
 
-		Throw2(io.Copy(w, resp.Body))
+		Throw2(io.Copy(w, body))
+	}).Catch(func(exc *Exception) {
+		sendCacheException(w, r, exc)
 	})
-
-	if exc == nil {
-		return
-	}
-
-	var he *HTTPError
-
-	if errors.As(exc.AsError(), &he) {
-		httpError(w, he.Status, he.Msg)
-
-		return
-	}
-
-	sendCacheException(w, r, exc)
 }

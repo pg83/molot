@@ -66,38 +66,24 @@ func parseResolveEndpoints(raw string) []string {
 	return result
 }
 
-func resolveFromEndpoint(endpoint string, payload []byte) ([]string, error) {
+func resolveFromEndpoint(endpoint string, payload []byte) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), resolveAttemptTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/v1/resolve", bytes.NewReader(payload))
-
-	if err != nil {
-		return nil, err
-	}
-
+	req := Throw2(http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/v1/resolve", bytes.NewReader(payload)))
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-
-	if err != nil {
-		return nil, err
-	}
-
+	resp := Throw2(http.DefaultClient.Do(req))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		body := Throw2(io.ReadAll(io.LimitReader(resp.Body, 4096)))
+		ThrowFmt("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var available []string
+	Throw(json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&available))
 
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&available); err != nil {
-		return nil, fmt.Errorf("bad response: %v", err)
-	}
-
-	return available, nil
+	return available
 }
 
 // resolveCompleted asks the first answering cache endpoint which of the
@@ -115,21 +101,19 @@ func resolveCompleted(raw string, uids []string) map[string]bool {
 	payload := Throw2(json.Marshal(uids))
 
 	for _, endpoint := range endpoints {
-		available, err := resolveFromEndpoint(endpoint, payload)
+		exc := Try(func() {
+			for _, uid := range resolveFromEndpoint(endpoint, payload) {
+				result[uid] = true
+			}
+		})
 
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "molot exec: resolve %s: %v, trying next endpoint\n", endpoint, err)
+		if exc == nil {
+			fmt.Fprintf(os.Stderr, "molot exec: resolved %d/%d nodes via %s\n", len(result), len(uids), endpoint)
 
-			continue
+			return result
 		}
 
-		for _, uid := range available {
-			result[uid] = true
-		}
-
-		fmt.Fprintf(os.Stderr, "molot exec: resolved %d/%d nodes via %s\n", len(result), len(uids), endpoint)
-
-		return result
+		fmt.Fprintf(os.Stderr, "molot exec: resolve %s: %v, trying next endpoint\n", endpoint, exc)
 	}
 
 	fmt.Fprintln(os.Stderr, "molot exec: no usable resolve endpoints, falling back to per-node S3 stats")

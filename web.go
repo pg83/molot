@@ -77,7 +77,11 @@ func webMain(args []string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		_ = server.Shutdown(ctx)
+		Try(func() {
+			Throw(server.Shutdown(ctx))
+		}).Catch(func(exc *Exception) {
+			fmt.Fprintln(os.Stderr, "molot web: shutdown:", exc)
+		})
 	}()
 
 	fmt.Fprintln(os.Stderr, "molot web: listening on", *listen, "bucket=", cfg.S3Bucket, "gorn=", cfg.GornAPI)
@@ -269,7 +273,7 @@ var runTmpl = template.Must(template.New("run").Parse(`<!DOCTYPE html>
 </html>`))
 
 func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
-	exc := Try(func() {
+	Try(func() {
 		if r.URL.Path != "/" {
 			ThrowHTTP(http.StatusNotFound, "not found")
 		}
@@ -326,15 +330,13 @@ func (s *webSrv) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		Throw2(w.Write(buf.Bytes()))
-	})
-
-	exc.Catch(func(e *Exception) {
+	}).Catch(func(e *Exception) {
 		sendHTTPException(w, r, e)
 	})
 }
 
 func (s *webSrv) handleArchive(w http.ResponseWriter, r *http.Request) {
-	exc := Try(func() {
+	Try(func() {
 		const pageSize = 50
 
 		before := r.URL.Query().Get("before")
@@ -382,15 +384,13 @@ func (s *webSrv) handleArchive(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		Throw2(w.Write(buf.Bytes()))
-	})
-
-	exc.Catch(func(e *Exception) {
+	}).Catch(func(e *Exception) {
 		sendHTTPException(w, r, e)
 	})
 }
 
 func (s *webSrv) handleRun(w http.ResponseWriter, r *http.Request) {
-	exc := Try(func() {
+	Try(func() {
 		key := strings.TrimPrefix(r.URL.Path, "/run/")
 
 		if key == "" || strings.Contains(key, "/") {
@@ -435,9 +435,7 @@ func (s *webSrv) handleRun(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		Throw2(w.Write(buf.Bytes()))
-	})
-
-	exc.Catch(func(e *Exception) {
+	}).Catch(func(e *Exception) {
 		sendHTTPException(w, r, e)
 	})
 }
@@ -454,7 +452,7 @@ func contentTypeFor(name string) string {
 }
 
 func (s *webSrv) handleNodeStream(w http.ResponseWriter, r *http.Request) {
-	exc := Try(func() {
+	Try(func() {
 		rest := strings.TrimPrefix(r.URL.Path, "/node/")
 		parts := strings.SplitN(rest, "/", 2)
 
@@ -478,9 +476,7 @@ func (s *webSrv) handleNodeStream(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", contentTypeFor(name))
 
 		Throw2(io.Copy(w, resp.Body))
-	})
-
-	exc.Catch(func(e *Exception) {
+	}).Catch(func(e *Exception) {
 		sendHTTPException(w, r, e)
 	})
 }

@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -23,6 +25,60 @@ func TestResolvePrefersMolotResolveOverIXPackageCache(t *testing.T) {
 
 	if c.Resolve != "10.0.0.2:8054" {
 		t.Fatalf("Resolve=%q", c.Resolve)
+	}
+}
+
+func TestResolveCompletedSkipsFailedAnswersWithoutPartialResults(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"HTTP failure", http.StatusServiceUnavailable, "unavailable"},
+		{"invalid JSON", http.StatusOK, "not JSON"},
+		{"partial list", http.StatusOK, `["leaked",`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, tc.body)
+			}))
+			defer failed.Close()
+
+			good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, `["done"]`)
+			}))
+			defer good.Close()
+
+			seed := resolveCompleted(failed.URL+","+good.URL, []string{"leaked", "done", "pending"})
+
+			if len(seed) != 1 || !seed["done"] {
+				t.Fatalf("seed=%v, want only done", seed)
+			}
+		})
+	}
+}
+
+func TestResolveCompletedEmptyAnswerStopsFallback(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		fmt.Fprint(w, `[]`)
+	}))
+	defer server.Close()
+
+	seed := resolveCompleted(server.URL+","+server.URL, []string{"uid"})
+
+	if len(seed) != 0 || calls.Load() != 1 {
+		t.Fatalf("seed=%v endpoint calls=%d", seed, calls.Load())
+	}
+}
+
+func TestResolveFromEndpointThrows(t *testing.T) {
+	if exc := Try(func() {
+		resolveFromEndpoint("http://%", []byte(`[]`))
+	}); exc == nil {
+		t.Fatal("invalid URL must throw")
 	}
 }
 

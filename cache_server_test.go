@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,10 +22,16 @@ import (
 type fakeObjectGetter struct {
 	objects map[string][]byte
 	gets    int
+	err     error
 }
 
 func (f *fakeObjectGetter) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	f.gets++
+
+	if f.err != nil {
+		return nil, f.err
+	}
+
 	data, ok := f.objects[aws.ToString(in.Bucket)+"/"+aws.ToString(in.Key)]
 
 	if !ok {
@@ -37,6 +44,55 @@ func (f *fakeObjectGetter) GetObject(_ context.Context, in *s3.GetObjectInput, _
 		Body:          io.NopCloser(bytes.NewReader(data)),
 		ContentLength: &n,
 	}, nil
+}
+
+func TestCacheHTTPExceptionBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		status int
+		gets   int
+	}{
+		{"bad resolve JSON", http.MethodPost, "/v1/resolve", "{", http.StatusBadRequest, 0},
+		{"wrong resolve method", http.MethodGet, "/v1/resolve", "", http.StatusMethodNotAllowed, 0},
+		{"wrong blob method", http.MethodPut, "/v1/blob/one", "", http.StatusMethodNotAllowed, 0},
+		{"bad UID", http.MethodGet, "/v1/blob/..", "", http.StatusBadRequest, 0},
+		{"unlisted UID", http.MethodGet, "/v1/blob/missing", "", http.StatusNotFound, 0},
+		{"S3 failure", http.MethodGet, "/v1/blob/one", "", http.StatusInternalServerError, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeObjectGetter{err: errors.New("storage unavailable")}
+			srv := newTestCacheSrv(fake, "")
+			srv.kv = testBlobKVMiss(t)
+			srv.setIndex([]byte("one\n"))
+			res := httptest.NewRecorder()
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+
+			if tc.path == "/v1/resolve" {
+				srv.handleResolve(res, req)
+			} else {
+				srv.handleBlob(res, req)
+			}
+
+			if res.Code != tc.status || fake.gets != tc.gets {
+				t.Fatalf("status=%d S3 GETs=%d body=%s", res.Code, fake.gets, res.Body.String())
+			}
+		})
+	}
+}
+
+func TestCacheLoadIndexThrowsOriginalError(t *testing.T) {
+	want := errors.New("index unavailable")
+	srv := newTestCacheSrv(&fakeObjectGetter{err: want}, "")
+	exc := Try(func() {
+		srv.loadIndex(context.Background())
+	})
+
+	if !errors.Is(exc.AsError(), want) {
+		t.Fatalf("exception=%v, want original error", exc)
+	}
 }
 
 func newTestCacheSrv(s3cli objectGetter, indexPath string) *cacheSrv {
@@ -119,6 +175,7 @@ func TestCacheBlobStreamsObjectAndDistinguishesNotFound(t *testing.T) {
 		"molot/molot/one/result.zstd": []byte("blob"),
 	}}
 	srv := newTestCacheSrv(fake, filepath.Join(t.TempDir(), "complete"))
+	srv.kv = testBlobKVMiss(t)
 	srv.setIndex([]byte("one\nmissing\n"))
 
 	res := httptest.NewRecorder()
@@ -136,11 +193,12 @@ func TestCacheBlobStreamsObjectAndDistinguishesNotFound(t *testing.T) {
 	}
 }
 
-func TestCacheBlobRequiresCurrentIndex(t *testing.T) {
+func TestCacheBlobKVMissRequiresCurrentIndex(t *testing.T) {
 	fake := &fakeObjectGetter{objects: map[string][]byte{
 		"molot/molot/one/result.zstd": []byte("blob"),
 	}}
 	srv := newTestCacheSrv(fake, filepath.Join(t.TempDir(), "complete"))
+	srv.kv = testBlobKVMiss(t)
 
 	for _, tc := range []struct {
 		name   string

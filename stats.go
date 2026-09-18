@@ -81,26 +81,26 @@ func statsChunkKey(now time.Time, host string) string {
 	return fmt.Sprintf("%s%d-%s-%08x", statsQueuePrefix, now.Unix(), host, rand.Uint32())
 }
 
-func (s *cacheSrv) statsLoop(uploader objectPutter, bucket string) {
-	host := Throw2(os.Hostname())
-
+func (s *cacheSrv) statsLoop(uploader objectPutter, bucket, host string) {
 	for {
-		body := statsChunk(s.stats.takeAll())
-
-		if len(body) == 0 {
-			continue
-		}
-
+		batch := s.stats.takeAll()
 		key := statsChunkKey(time.Now(), host)
-		_, err := uploader.PutObject(context.Background(), &s3.PutObjectInput{
-			Bucket: aws.String(bucket),
-			Key:    aws.String(key),
-			Body:   bytes.NewReader(body),
-		})
 
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "molot cache: stats chunk %s: %v\n", key, err)
-		}
+		Try(func() {
+			body := statsChunk(batch)
+
+			if len(body) == 0 {
+				return
+			}
+
+			Throw2(uploader.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: aws.String(bucket),
+				Key:    aws.String(key),
+				Body:   bytes.NewReader(body),
+			}))
+		}).Catch(func(exc *Exception) {
+			fmt.Fprintf(os.Stderr, "molot cache: stats chunk %s: %v\n", key, exc)
+		})
 	}
 }
 
@@ -110,15 +110,20 @@ type objectPutter interface {
 
 // parseChunkTS extracts the unix-seconds timestamp from a chunk key of
 // the form queue/<ts>-<host>-<rand>.
-func parseChunkTS(key string) (int64, error) {
+func parseChunkTS(key string) int64 {
 	name := strings.TrimPrefix(key, statsQueuePrefix)
 	ts, _, ok := strings.Cut(name, "-")
 
 	if !ok {
-		return 0, fmt.Errorf("chunk key %q has no timestamp", key)
+		ThrowFmt("chunk key %q has no timestamp", key)
 	}
 
-	return strconv.ParseInt(ts, 10, 64)
+	return Throw2(strconv.ParseInt(ts, 10, 64))
+}
+
+type queuedChunk struct {
+	key string
+	ts  int64
 }
 
 func mergeChunk(stats map[string]int64, ts int64, lines *bufio.Scanner) {
@@ -149,7 +154,7 @@ func statsMain(args []string) {
 
 	// Pin the chunk list up front: chunks written while we merge stay
 	// for the next run, and the delete below touches only what was read.
-	var chunks []string
+	var chunks []queuedChunk
 	var token *string
 
 	for {
@@ -160,7 +165,13 @@ func statsMain(args []string) {
 		}))
 
 		for _, object := range page.Contents {
-			chunks = append(chunks, *object.Key)
+			Try(func() {
+				key := *object.Key
+				chunks = append(chunks, queuedChunk{key: key, ts: parseChunkTS(key)})
+			}).Catch(func(exc *Exception) {
+				// Invalid keys never enter the merge or deletion list.
+				fmt.Fprintf(os.Stderr, "molot stats: skip %s: %v\n", *object.Key, exc)
+			})
 		}
 
 		if page.NextContinuationToken == nil {
@@ -184,24 +195,14 @@ func statsMain(args []string) {
 
 	before := len(stats)
 
-	for _, key := range chunks {
-		ts, err := parseChunkTS(key)
-
-		if err != nil {
-			// Leave the alien object in place: visible in every run's
-			// log instead of silently destroyed.
-			fmt.Fprintf(os.Stderr, "molot stats: skip %v\n", err)
-
-			continue
-		}
-
+	for _, chunk := range chunks {
 		resp := Throw2(cfg.S3Cli.GetObject(ctx, &s3.GetObjectInput{
 			Bucket: aws.String(cfg.S3Bucket),
-			Key:    aws.String(key),
+			Key:    aws.String(chunk.key),
 		}))
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
-		mergeChunk(stats, ts, scanner)
+		mergeChunk(stats, chunk.ts, scanner)
 		Throw(resp.Body.Close())
 	}
 
@@ -217,18 +218,14 @@ func statsMain(args []string) {
 		len(chunks), before, len(stats))
 }
 
-func deleteChunks(ctx context.Context, cfg *Config, chunks []string) {
+func deleteChunks(ctx context.Context, cfg *Config, chunks []queuedChunk) {
 	// MinIO rejects the SDK's batch DeleteObjects with MissingContentMD5
 	// (the SDK stopped sending that header); per-key deletes are plenty
 	// at this cadence.
-	for _, key := range chunks {
-		if _, err := parseChunkTS(key); err != nil {
-			continue
-		}
-
+	for _, chunk := range chunks {
 		Throw2(cfg.S3Cli.DeleteObject(ctx, &s3.DeleteObjectInput{
 			Bucket: aws.String(cfg.S3Bucket),
-			Key:    aws.String(key),
+			Key:    aws.String(chunk.key),
 		}))
 	}
 }
