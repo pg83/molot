@@ -316,6 +316,10 @@ func (s *cacheSrv) handleBlob(w http.ResponseWriter, r *http.Request) {
 			ThrowHTTP(http.StatusBadRequest, "bad uid")
 		}
 
+		if _, indexed := s.indexSnapshot()[uid]; !indexed {
+			ThrowHTTP(http.StatusNotFound, "uid not found")
+		}
+
 		key := fmt.Sprintf("%s/%s/result.zstd", s.s3Root, uid)
 		resp, err := s.s3.GetObject(r.Context(), &s3.GetObjectInput{
 			Bucket: aws.String(s.blobBucket),

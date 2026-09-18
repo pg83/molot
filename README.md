@@ -44,7 +44,8 @@ S3_BUCKET=molot S3_ENDPOINT=http://minio:9000 \
 
 `POST /v1/resolve` accepts a JSON list of node uids and returns the
 sub-list present in `s3://cix/complete`. `GET /v1/blob/<uid>` streams
-`s3://$S3_BUCKET/molot/<uid>/result.zstd`. The uid index is fetched as
+`s3://$S3_BUCKET/molot/<uid>/result.zstd` only when the uid is in that
+index. Unlisted uids return `404` without any S3 request. The uid index is fetched as
 one object and cached in memory for 30 seconds; blob bodies are never
 cached by the service.
 

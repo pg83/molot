@@ -119,6 +119,7 @@ func TestCacheBlobStreamsObjectAndDistinguishesNotFound(t *testing.T) {
 		"molot/molot/one/result.zstd": []byte("blob"),
 	}}
 	srv := newTestCacheSrv(fake, filepath.Join(t.TempDir(), "complete"))
+	srv.setIndex([]byte("one\nmissing\n"))
 
 	res := httptest.NewRecorder()
 	srv.handleBlob(res, httptest.NewRequest(http.MethodGet, "/v1/blob/one", nil))
@@ -132,6 +133,39 @@ func TestCacheBlobStreamsObjectAndDistinguishesNotFound(t *testing.T) {
 
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("missing status=%d body=%q", res.Code, res.Body.String())
+	}
+}
+
+func TestCacheBlobRequiresCurrentIndex(t *testing.T) {
+	fake := &fakeObjectGetter{objects: map[string][]byte{
+		"molot/molot/one/result.zstd": []byte("blob"),
+	}}
+	srv := newTestCacheSrv(fake, filepath.Join(t.TempDir(), "complete"))
+
+	for _, tc := range []struct {
+		name   string
+		index  string
+		status int
+		gets   int
+	}{
+		{"empty index", "", http.StatusNotFound, 0},
+		{"unlisted object exists in S3", "other\n", http.StatusNotFound, 0},
+		{"added to index", "one\n", http.StatusOK, 1},
+		{"removed from index", "other\n", http.StatusNotFound, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv.setIndex([]byte(tc.index))
+			res := httptest.NewRecorder()
+			srv.handleBlob(res, httptest.NewRequest(http.MethodGet, "/v1/blob/one", nil))
+
+			if res.Code != tc.status {
+				t.Fatalf("status=%d, want %d", res.Code, tc.status)
+			}
+
+			if fake.gets != tc.gets {
+				t.Fatalf("S3 GETs=%d, want %d", fake.gets, tc.gets)
+			}
+		})
 	}
 }
 
