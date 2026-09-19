@@ -119,14 +119,12 @@ func TestResolveCompletedSeedsFromFirstAnsweringEndpoint(t *testing.T) {
 	}
 }
 
-func TestResolveCompletedFailureIsEmptyNotFatal(t *testing.T) {
-	seed := resolveCompleted("127.0.0.1:1", []string{"uid"})
-
-	if len(seed) != 0 {
-		t.Fatalf("seed=%v", seed)
-	}
-
-	if len(resolveCompleted("", []string{"uid"})) != 0 {
-		t.Fatal("empty endpoint list must not resolve")
+func TestResolveCompletedFailureIsFatal(t *testing.T) {
+	for _, endpoints := range []string{"127.0.0.1:1", ""} {
+		if exc := Try(func() {
+			resolveCompleted(endpoints, []string{"uid"})
+		}); exc == nil {
+			t.Fatalf("failed authoritative resolve at %q must throw", endpoints)
+		}
 	}
 }

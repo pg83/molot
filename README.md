@@ -2,7 +2,7 @@
 
 Distributed executor for IX build graphs, dispatched through [gorn](https://github.com/pg83/gorn).
 
-IX emits a full build graph — nodes with `in_dir`, `out_dir`, commands, pool — and passes it to a local executor (`assemble`). **molot** is a drop-in replacement that dispatches each node as a separate gorn task: the wrapper script downloads the node's inputs from S3, runs the command inside a `unshare`d mount namespace that exposes the inputs at the exact paths the graph uses, and uploads the output directory back to S3 as a single `zstd`-compressed tarball.
+IX emits a full build graph — nodes with `in_dir`, `out_dir`, commands, pool — and passes it to a local executor (`assemble`). **molot** dispatches each node as a separate gorn task. The worker's `molot exec` downloads inputs through `molot store`, runs the commands inside a mount namespace, and uploads the output directory through `molot store` as a zstd-compressed tarball.
 
 Node uid becomes the gorn task GUID, so S3 objects are content-addressed by build input hash. Re-dispatching an already-built node is an instant no-op (gorn's built-in `HEAD result.json` idempotency check).
 
@@ -14,6 +14,8 @@ export S3_BUCKET=ix-artifacts
 export S3_ENDPOINT=http://minio:9000
 export AWS_ACCESS_KEY_ID=...
 export AWS_SECRET_ACCESS_KEY=...
+export MOLOT_STORE_ENDPOINT=http://127.0.0.1:8064
+export IX_PACKAGE_CACHE=http://127.0.0.1:8064
 
 # Produce a graph from IX, pipe into molot:
 cd path/to/ix && IX_DUMP_GRAPH=1 IX_FLAGS='stalix=' ./ix build lib/c | molot
@@ -28,13 +30,57 @@ content-addressed cache, but Molot stops waiting for the rest of the graph.
 Set `IX_KEEP_GOING=yes` to keep traversing independent branches and report all
 failures plus nodes broken by failed dependencies.
 
-Debug the generated wrap scripts without touching gorn:
+Set `MOLOT_DUMP=1` to print the task JSON sent to Gorn.
+
+## Internal artifact store
 
 ```sh
-MOLOT_RESOLVE=127.0.0.1:1 MOLOT_GORN=/bin/true MOLOT_DUMP=1 ./molot < graph.json
+S3_BUCKET=molot S3_ENDPOINT=http://minio:9000 \
+  AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
+  molot store --listen 127.0.0.1:8064 \
+    --index-bucket molot --index-key complete --index-ttl "$INDEX_REFRESH_INTERVAL" \
+    --kv-endpoint "$KV_ENDPOINT" --kv-bucket "$KV_BUCKET" --kv-timeout "$KV_TIMEOUT"
 ```
 
-Serve the shared package cache to local IX executors:
+The listen address, index bucket/key/refresh interval, KV endpoint/bucket/timeout
+must be supplied explicitly. `MOLOT_STORE_INDEX_BUCKET`, `MOLOT_STORE_INDEX_KEY`
+and `MOLOT_STORE_KV_*` can supply the corresponding flags. They have no defaults.
+
+Store serves the same read API as cache:
+
+- `POST /v1/resolve`: JSON UID list in, available UID list out.
+- `POST /v2/resolve`: the same request, a UID-to-MD5 object out. The value is
+  empty when an object has no usable single-part ETag.
+- `GET /v1/blob/<uid>`: the raw archive.
+
+Store resolve is authoritative: it checks the loaded `complete` index and a
+local positive cache, then HEAD-checks every unknown UID in MinIO. Only actual
+404s count as absent. Positive results are cached in memory; loading a new
+index clears the entire positive cache. Negative results are not cached.
+Both resolve versions enqueue the complete requested UID list for the same
+MinIO `queue/` statistics writer used by cache, including missing UIDs.
+
+GET always checks KV first. A KV miss or error falls through to MinIO,
+independently of the index. Artifacts up to and including 64 MiB populate KV;
+a failed KV write does not fail the download. Larger artifacts stream from
+MinIO without populating KV.
+
+`PUT /v1/blob/<uid>` reads the request body into memory and writes it to MinIO
+using a seekable reader so S3 retries can replay it. PUT never reads or writes
+KV. Success is `204`, after MinIO confirms the write. The 64 MiB cache limit
+does not limit uploads.
+
+The graph executor uses authoritative resolve at startup, then trusts its
+answer and successful worker completion. It performs no per-node S3 HEADs.
+If every resolve endpoint fails, it aborts rather than treating all UIDs as
+missing. Configure `MOLOT_RESOLVE` / `IX_PACKAGE_CACHE` with **store** endpoints.
+`MOLOT_STORE_ENDPOINT` / `--store-endpoint` explicitly sets the worker's store
+URL and is forwarded to Gorn tasks. Workers use HTTP GET/PUT for artifacts;
+S3 remains in use for the coordinator's run metadata and Gorn's task results.
+
+## External package cache
+
+Serve the external package cache:
 
 ```sh
 S3_BUCKET=molot S3_ENDPOINT=http://minio:9000 \
@@ -71,22 +117,26 @@ goroutine which flushes whatever has accumulated as a jsonline chunk to
 per line). `molot stats` — meant to run periodically as a singleton job
 — folds all chunks into `s3://$S3_BUCKET/stats`, a JSON dict of
 `uid -> last-use unix timestamp`, then deletes the consumed chunks.
-Cleanup tooling will consume `stats` later.
+Lab's complete job uses these statistics for retention and rebuilds the index.
 
 ## Environment
 
 | Variable | Required | Purpose |
 |---|---|---|
 | `GORN_API` | yes | URL of `gorn control` (`--api` for each `gorn ignite`) |
-| `S3_BUCKET` | yes | S3 bucket for both gorn (`gorn/<uid>/result.json` etc.) and molot artifacts (`gorn/<uid>/result.zstd`) |
-| `S3_ENDPOINT` | yes | S3 endpoint URL, forwarded to worker; used to build `MC_HOST_molot` for `minio-client` |
-| `AWS_ACCESS_KEY_ID` | yes | forwarded to worker |
-| `AWS_SECRET_ACCESS_KEY` | yes | forwarded to worker |
+| `S3_BUCKET` | yes (coordinator/services) | S3 bucket for run metadata and artifacts |
+| `S3_ENDPOINT` | yes (coordinator/services) | S3 endpoint URL |
+| `AWS_ACCESS_KEY_ID` | yes (coordinator/services) | S3 access key |
+| `AWS_SECRET_ACCESS_KEY` | yes (coordinator/services) | S3 secret key |
 | `AWS_REGION` | no | default `us-east-1` |
 | `MOLOT_GORN` | no | path to `gorn` binary; default `gorn` |
 | `MOLOT_DUMP` | no | if set, prints each node's wrap script to stderr before dispatching |
 | `MOLOT_QUIET` | no | if set, don't stream per-node `gorn ignite` stdout/stderr; only dump them if a node fails |
-| `MOLOT_RESOLVE` | yes (executor) | comma-separated `molot cache` endpoints; at startup all graph uids are batch-resolved via `/v1/resolve` and hits are skipped entirely — no gorn call, no dep traversal. Falls back to `IX_PACKAGE_CACHE` when unset; the graph executor refuses to start with an empty list. Misses are backstopped by a per-node S3 stat. Same list via `--resolve`. |
+| `MOLOT_RESOLVE` | yes (executor) | Authoritative `molot store` endpoints. Falls back to `IX_PACKAGE_CACHE` when unset. Same list via `--resolve`. |
+| `MOLOT_STORE_ENDPOINT` | yes (executor/worker) | Explicit HTTP(S) store URL as seen from workers; no default. Same setting via `--store-endpoint` on the coordinator. |
+| `MOLOT_STORE_KV_ENDPOINT` | yes (store, unless set via CLI) | KV front URL; no default. |
+| `MOLOT_STORE_KV_BUCKET` | yes (store, unless set via CLI) | KV bucket for artifact bytes; no default. |
+| `MOLOT_STORE_KV_TIMEOUT` | yes (store, unless set via CLI) | Positive KV request timeout; no default. |
 | `MOLOT_CACHE_KV_ENDPOINT` | yes (cache, unless set via CLI) | KV front URL. Same setting via `--kv-endpoint`; no default. |
 | `MOLOT_CACHE_KV_BUCKET` | yes (cache, unless set via CLI) | KV bucket for artifact bytes. Same setting via `--kv-bucket`; no default. |
 | `MOLOT_CACHE_KV_TIMEOUT` | yes (cache, unless set via CLI) | Positive timeout for a complete KV request, as a Go duration. Same setting via `--kv-timeout`; no default. |
@@ -122,7 +172,7 @@ Designed for stalix endpoints. Expected on `PATH`: `sh`, `tar`, `zstd`, `unzstd`
 
 The graph **must** be generated with `IX_FLAGS='stalix='` so IX omits the `confine`/`tmpfs` wrapping around build cmds. Nested user namespaces (molot's outer ns + confine's inner ns) hit EACCES when overlayfs whiteouts are created from the inner ns; stripping the wrap at graph-gen time sidesteps that. molot itself mounts tmpfs on `/ix/build` inside its ns so `${tmp}` paths still resolve.
 
-S3 auth is done via `MC_HOST_molot` (constructed from env vars inside the script) — no `~/.mc/config.json` state.
+Workers access artifacts through the explicitly configured store endpoint.
 
 ## See also
 

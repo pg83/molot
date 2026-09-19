@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"sync"
@@ -133,7 +132,7 @@ func (ex *Executor) executeNode(n *Node) bool {
 	out := n.OutDirs[0]
 	rec := NodeRec{UID: guid, Out: out, StartedAt: time.Now()}
 
-	if ex.cache.Has(guid) || s3StatExists(context.Background(), ex.cfg.S3Cli, ex.cfg.S3Bucket, ex.cfg.ResultObjectKey(guid)) {
+	if ex.cache.Has(guid) {
 		ex.cache.Add(guid)
 
 		rec.FinishedAt = time.Now()

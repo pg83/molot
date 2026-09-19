@@ -16,8 +16,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"golang.org/x/sys/unix"
 )
 
@@ -45,13 +43,14 @@ func execMain(args []string) {
 	}
 
 	task := readExecTask(args)
-	cfg := loadS3Config()
+	var store *storeClient
 
 	cwd := Throw2(os.Getwd())
 
 	Try(func() {
+		store = newStoreClient(os.Getenv("MOLOT_STORE_ENDPOINT"))
 		setupNamespace(cwd, task)
-		fetchDeps(cfg, cwd, task.InDirs)
+		fetchDeps(store, cwd, task.InDirs)
 	}).Catch(func(exc *Exception) {
 		fmt.Fprintln(os.Stderr, "molot exec: infra (setup/fetch):", exc.Error())
 		os.Exit(InfraExitCode)
@@ -78,7 +77,7 @@ func execMain(args []string) {
 	})
 
 	Try(func() {
-		pushOutput(cfg, cwd, task)
+		pushOutput(store, cwd, task)
 	}).Catch(func(exc *Exception) {
 		fmt.Fprintln(os.Stderr, "molot exec: infra (push):", exc.Error())
 		os.Exit(InfraExitCode)
@@ -161,7 +160,7 @@ func markOpaque(p string) {
 	Throw(unix.Setxattr(p, "user.overlay.opaque", []byte("y"), 0))
 }
 
-func fetchDeps(cfg *Config, cwd string, ins []string) {
+func fetchDeps(store *storeClient, cwd string, ins []string) {
 	for i, in := range ins {
 		uid := parseUIDFromStorePath(in)
 		arch := fmt.Sprintf("%s/dep.%d.tar.zst", cwd, i)
@@ -169,14 +168,8 @@ func fetchDeps(cfg *Config, cwd string, ins []string) {
 		fmt.Fprintf(os.Stderr, "molot exec: fetch %s -> %s\n", uid, in)
 
 		f := Throw2(os.Create(arch))
-
-		resp := Throw2(cfg.S3Cli.GetObject(context.Background(), &s3.GetObjectInput{
-			Bucket: aws.String(cfg.S3Bucket),
-			Key:    aws.String(cfg.ResultObjectKey(uid)),
-		}))
-
-		Throw2(io.Copy(f, resp.Body))
-		Throw(resp.Body.Close())
+		defer f.Close()
+		store.get(context.Background(), uid, f)
 		Throw(f.Close())
 
 		untar := exec.Command("tar", "--use-compress-program=unzstd", "-xf", arch, "-C", in)
@@ -269,7 +262,7 @@ func verifyPredict(t ExecTask) {
 	}
 }
 
-func pushOutput(cfg *Config, cwd string, t ExecTask) {
+func pushOutput(store *storeClient, cwd string, t ExecTask) {
 	out := cwd + "/out.tar.zst"
 
 	tar := exec.Command("tar", "--use-compress-program=zstd", "-cf", out, "-C", t.OutDir, ".")
@@ -280,11 +273,5 @@ func pushOutput(cfg *Config, cwd string, t ExecTask) {
 	f := Throw2(os.Open(out))
 	defer f.Close()
 
-	Throw2(cfg.S3Cli.PutObject(context.Background(), &s3.PutObjectInput{
-		Bucket: aws.String(cfg.S3Bucket),
-		Key:    aws.String(cfg.ResultObjectKey(t.UID)),
-		Body:   f,
-	}))
-
-	fmt.Fprintf(os.Stderr, "molot exec: pushed %s\n", cfg.ResultObjectKey(t.UID))
+	store.put(context.Background(), t.UID, f)
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"fmt"
 	"os"
 	"regexp"
 	"strconv"
@@ -39,45 +38,40 @@ func expandEnv(s string) string {
 }
 
 type Config struct {
-	GornBin   string     `json:"gorn_bin,omitempty"`
-	GornAPI   string     `json:"gorn_api,omitempty"`
-	S3Bucket  string     `json:"s3_bucket,omitempty"`
-	S3Endpt   string     `json:"s3_endpoint,omitempty"`
-	AWSKey    string     `json:"aws_access_key_id,omitempty"`
-	AWSSecret string     `json:"aws_secret_access_key,omitempty"`
-	AWSRegion string     `json:"aws_region,omitempty"`
-	S3Root    string     `json:"s3_root,omitempty"`
-	FullSlots int        `json:"full_slots,omitempty"`
-	Resolve   string     `json:"resolve,omitempty"`
-	Dump      bool       `json:"dump,omitempty"`
-	Quiet     bool       `json:"quiet,omitempty"`
-	KeepGoing bool       `json:"-"` // runtime-only: IX_KEEP_GOING=yes
-	UID       string     `json:"-"` // not meaningful in a config file; runtime-only
-	S3Cli     *s3.Client `json:"-"` // initialized in validate()
-}
-
-// ResultObjectKey returns the in-bucket key (no alias / bucket prefix)
-// for a node's result.zstd. Matches the layout the wrap.sh template
-// uploads to via selfS3 / pulls deps from via depS3.
-func (c *Config) ResultObjectKey(uid string) string {
-	return fmt.Sprintf("%s/%s/result.zstd", c.S3Root, uid)
+	GornBin       string     `json:"gorn_bin,omitempty"`
+	GornAPI       string     `json:"gorn_api,omitempty"`
+	S3Bucket      string     `json:"s3_bucket,omitempty"`
+	S3Endpt       string     `json:"s3_endpoint,omitempty"`
+	AWSKey        string     `json:"aws_access_key_id,omitempty"`
+	AWSSecret     string     `json:"aws_secret_access_key,omitempty"`
+	AWSRegion     string     `json:"aws_region,omitempty"`
+	S3Root        string     `json:"s3_root,omitempty"`
+	FullSlots     int        `json:"full_slots,omitempty"`
+	Resolve       string     `json:"resolve,omitempty"`
+	StoreEndpoint string     `json:"store_endpoint,omitempty"`
+	Dump          bool       `json:"dump,omitempty"`
+	Quiet         bool       `json:"quiet,omitempty"`
+	KeepGoing     bool       `json:"-"` // runtime-only: IX_KEEP_GOING=yes
+	UID           string     `json:"-"` // not meaningful in a config file; runtime-only
+	S3Cli         *s3.Client `json:"-"` // initialized in validate()
 }
 
 type cliOpts struct {
-	cfgFile   string
-	gornBin   string
-	gornAPI   string
-	s3Bucket  string
-	s3Endpt   string
-	awsKey    string
-	awsSecret string
-	awsRegion string
-	s3Root    string
-	fullSlots int
-	resolve   string
-	dump      bool
-	quiet     bool
-	uid       string
+	cfgFile       string
+	gornBin       string
+	gornAPI       string
+	s3Bucket      string
+	s3Endpt       string
+	awsKey        string
+	awsSecret     string
+	awsRegion     string
+	s3Root        string
+	fullSlots     int
+	resolve       string
+	storeEndpoint string
+	dump          bool
+	quiet         bool
+	uid           string
 }
 
 func parseCLI(args []string) (*cliOpts, *flag.FlagSet) {
@@ -96,7 +90,8 @@ func parseCLI(args []string) (*cliOpts, *flag.FlagSet) {
 	fs.StringVar(&o.gornBin, "gorn", "", "path to gorn binary (env MOLOT_GORN; default \"gorn\")")
 	fs.StringVar(&o.s3Root, "s3-root", "", "S3 key prefix for task artifacts (env MOLOT_S3_ROOT; default \"molot\")")
 	fs.IntVar(&o.fullSlots, "full-slots", 0, "slots requested from gorn for pool=full nodes; all other nodes request 1 (env MOLOT_FULL_SLOTS; default 1)")
-	fs.StringVar(&o.resolve, "resolve", "", "comma-separated molot cache endpoints to batch-resolve completed uids (env MOLOT_RESOLVE, else IX_PACKAGE_CACHE)")
+	fs.StringVar(&o.resolve, "resolve", "", "comma-separated authoritative molot store endpoints (env MOLOT_RESOLVE, else IX_PACKAGE_CACHE)")
+	fs.StringVar(&o.storeEndpoint, "store-endpoint", "", "required worker molot store URL (env MOLOT_STORE_ENDPOINT)")
 	fs.BoolVar(&o.dump, "dump", false, "dump each generated wrap script to stderr (env MOLOT_DUMP)")
 	fs.BoolVar(&o.quiet, "quiet", false, "suppress per-task stream, print only on failure (env MOLOT_QUIET)")
 	fs.StringVar(&o.uid, "uid", "", "run only the node with this uid, skipping dep traversal (for debugging)")
@@ -166,6 +161,7 @@ func loadConfig(args []string) *Config {
 	c.S3Root = setFromFlagStr(fs, "s3-root", c.S3Root, o.s3Root)
 	c.FullSlots = setFromFlagInt(fs, "full-slots", c.FullSlots, o.fullSlots)
 	c.Resolve = setFromFlagStr(fs, "resolve", c.Resolve, o.resolve)
+	c.StoreEndpoint = setFromFlagStr(fs, "store-endpoint", c.StoreEndpoint, o.storeEndpoint)
 	c.Dump = setFromFlagBool(fs, "dump", c.Dump, o.dump)
 	c.Quiet = setFromFlagBool(fs, "quiet", c.Quiet, o.quiet)
 	c.UID = o.uid // CLI-only
@@ -193,6 +189,10 @@ func loadConfig(args []string) *Config {
 }
 
 func overlayFromEnv(c *Config) {
+	if v, ok := os.LookupEnv("MOLOT_STORE_ENDPOINT"); ok {
+		c.StoreEndpoint = v
+	}
+
 	if v := os.Getenv("GORN_API"); v != "" {
 		c.GornAPI = v
 	}
@@ -248,6 +248,8 @@ func overlayFromEnv(c *Config) {
 }
 
 func validate(c *Config) {
+	newStoreClient(c.StoreEndpoint)
+
 	if c.GornAPI == "" {
 		ThrowFmt("GORN_API / --api is required")
 	}

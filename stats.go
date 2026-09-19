@@ -99,7 +99,7 @@ func (s *cacheSrv) statsLoop(uploader objectPutter, bucket, host string) {
 				Body:   bytes.NewReader(body),
 			}))
 		}).Catch(func(exc *Exception) {
-			fmt.Fprintf(os.Stderr, "molot cache: stats chunk %s: %v\n", key, exc)
+			fmt.Fprintf(os.Stderr, "molot: stats chunk %s: %v\n", key, exc)
 		})
 	}
 }

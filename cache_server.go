@@ -40,6 +40,7 @@ type cacheSrv struct {
 
 	mu    sync.RWMutex
 	index map[string]string
+	known map[string]string // store's positive HEAD results, cleared with the index
 
 	stats *statsQueue
 }
@@ -53,31 +54,46 @@ func envDefault(name, fallback string) string {
 }
 
 func cacheMain(args []string) {
-	fs := flag.NewFlagSet("molot cache", flag.ContinueOnError)
+	artifactServerMain("cache", args)
+}
+
+func artifactServerMain(command string, args []string) {
+	fs := flag.NewFlagSet("molot "+command, flag.ContinueOnError)
+	prefix := "MOLOT_" + strings.ToUpper(command) + "_"
+	indexBucketValue := os.Getenv(prefix + "INDEX_BUCKET")
+	indexKeyValue := os.Getenv(prefix + "INDEX_KEY")
+	var indexInterval time.Duration
+
+	if command == "cache" {
+		indexBucketValue = envDefault(prefix+"INDEX_BUCKET", "cix")
+		indexKeyValue = envDefault(prefix+"INDEX_KEY", "complete")
+		indexInterval = 30 * time.Second
+	}
+
 	listen := fs.String("listen", "", "HTTP listen address, e.g. 0.0.0.0:8054")
-	indexBucket := fs.String("index-bucket", envDefault("MOLOT_CACHE_INDEX_BUCKET", "cix"), "S3 bucket containing the uid index")
-	indexKey := fs.String("index-key", envDefault("MOLOT_CACHE_INDEX_KEY", "complete"), "S3 object containing one uid per line")
-	indexTTL := fs.Duration("index-ttl", 30*time.Second, "background uid index refresh interval")
-	kvEndpoint := fs.String("kv-endpoint", os.Getenv("MOLOT_CACHE_KV_ENDPOINT"), "required KV front URL")
-	kvBucket := fs.String("kv-bucket", os.Getenv("MOLOT_CACHE_KV_BUCKET"), "required KV bucket for artifact bytes")
-	kvTimeout := fs.String("kv-timeout", os.Getenv("MOLOT_CACHE_KV_TIMEOUT"), "required positive KV request timeout, as a Go duration")
+	indexBucket := fs.String("index-bucket", indexBucketValue, "S3 bucket containing the uid index")
+	indexKey := fs.String("index-key", indexKeyValue, "S3 object containing one uid per line")
+	indexTTL := fs.Duration("index-ttl", indexInterval, "positive background uid index refresh interval (required for store)")
+	kvEndpoint := fs.String("kv-endpoint", os.Getenv(prefix+"KV_ENDPOINT"), "required KV front URL")
+	kvBucket := fs.String("kv-bucket", os.Getenv(prefix+"KV_BUCKET"), "required KV bucket for artifact bytes")
+	kvTimeout := fs.String("kv-timeout", os.Getenv(prefix+"KV_TIMEOUT"), "required positive KV request timeout, as a Go duration")
 
 	Throw(fs.Parse(args))
 
 	if *listen == "" {
-		ThrowFmt("cache: --listen is required")
+		ThrowFmt("%s: --listen is required", command)
 	}
 
 	if *indexBucket == "" || *indexKey == "" {
-		ThrowFmt("cache: --index-bucket and --index-key must not be empty")
+		ThrowFmt("%s: --index-bucket and --index-key must not be empty", command)
 	}
 
 	if *indexTTL <= 0 {
-		ThrowFmt("cache: --index-ttl must be positive")
+		ThrowFmt("%s: --index-ttl must be positive", command)
 	}
 
 	if *kvEndpoint == "" || *kvBucket == "" || *kvTimeout == "" {
-		ThrowFmt("cache: --kv-endpoint, --kv-bucket and --kv-timeout are required")
+		ThrowFmt("%s: --kv-endpoint, --kv-bucket and --kv-timeout are required", command)
 	}
 
 	kv := newBlobKV(*kvEndpoint, *kvBucket, Throw2(time.ParseDuration(*kvTimeout)))
@@ -106,6 +122,10 @@ func cacheMain(args []string) {
 	mux.HandleFunc("/v2/resolve", srv.handleResolveV2)
 	mux.HandleFunc("/v1/blob/", srv.handleBlob)
 
+	if command == "store" {
+		mux = (&storeSrv{cacheSrv: srv, storage: cfg.S3Cli}).routes()
+	}
+
 	server := &http.Server{
 		Addr:              *listen,
 		Handler:           mux,
@@ -117,7 +137,7 @@ func cacheMain(args []string) {
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 		sig := <-sigs
-		fmt.Fprintln(os.Stderr, "molot cache: signal:", sig)
+		fmt.Fprintf(os.Stderr, "molot %s: signal: %v\n", command, sig)
 		stopRefresh()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -126,12 +146,12 @@ func cacheMain(args []string) {
 		Try(func() {
 			Throw(server.Shutdown(ctx))
 		}).Catch(func(exc *Exception) {
-			fmt.Fprintln(os.Stderr, "molot cache: shutdown:", exc)
+			fmt.Fprintf(os.Stderr, "molot %s: shutdown: %v\n", command, exc)
 		})
 	}()
 
-	fmt.Fprintf(os.Stderr, "molot cache: listening on %s index=s3://%s/%s blobs=s3://%s/%s/<uid>/result.zstd\n",
-		*listen, *indexBucket, *indexKey, cfg.S3Bucket, cfg.S3Root)
+	fmt.Fprintf(os.Stderr, "molot %s: listening on %s index=s3://%s/%s blobs=s3://%s/%s/<uid>/result.zstd\n",
+		command, *listen, *indexBucket, *indexKey, cfg.S3Bucket, cfg.S3Root)
 
 	err := server.ListenAndServe()
 
@@ -149,7 +169,7 @@ func sendCacheException(w http.ResponseWriter, r *http.Request, e *Exception) {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "molot cache: %s %s: %s\n", r.Method, r.URL.Path, e.Error())
+	fmt.Fprintf(os.Stderr, "molot: %s %s: %s\n", r.Method, r.URL.Path, e.Error())
 
 	httpError(w, http.StatusInternalServerError, e.Error())
 }
@@ -158,33 +178,37 @@ func sendCacheException(w http.ResponseWriter, r *http.Request, e *Exception) {
 // bare uid list, so clients can verify fetched blobs. The hash is ""
 // when the index has no attestation for that uid.
 func (s *cacheSrv) handleResolveV2(w http.ResponseWriter, r *http.Request) {
-	s.serveResolve(w, r, func(w http.ResponseWriter, requested []string, index map[string]string) {
-		available := make(map[string]string, len(requested))
+	s.serveResolve(w, r, writeResolveV2)
+}
 
-		for _, uid := range requested {
-			if md5, ok := index[uid]; ok {
-				available[uid] = md5
-			}
+func writeResolveV2(w http.ResponseWriter, requested []string, index map[string]string) {
+	available := make(map[string]string, len(requested))
+
+	for _, uid := range requested {
+		if md5, ok := index[uid]; ok {
+			available[uid] = md5
 		}
+	}
 
-		w.Header().Set("Content-Type", "application/json")
-		Throw(json.NewEncoder(w).Encode(available))
-	})
+	w.Header().Set("Content-Type", "application/json")
+	Throw(json.NewEncoder(w).Encode(available))
 }
 
 func (s *cacheSrv) handleResolve(w http.ResponseWriter, r *http.Request) {
-	s.serveResolve(w, r, func(w http.ResponseWriter, requested []string, index map[string]string) {
-		available := make([]string, 0, len(requested))
+	s.serveResolve(w, r, writeResolveV1)
+}
 
-		for _, uid := range requested {
-			if _, ok := index[uid]; ok {
-				available = append(available, uid)
-			}
+func writeResolveV1(w http.ResponseWriter, requested []string, index map[string]string) {
+	available := make([]string, 0, len(requested))
+
+	for _, uid := range requested {
+		if _, ok := index[uid]; ok {
+			available = append(available, uid)
 		}
+	}
 
-		w.Header().Set("Content-Type", "application/json")
-		Throw(json.NewEncoder(w).Encode(available))
-	})
+	w.Header().Set("Content-Type", "application/json")
+	Throw(json.NewEncoder(w).Encode(available))
 }
 
 func (s *cacheSrv) serveResolve(w http.ResponseWriter, r *http.Request, respond func(http.ResponseWriter, []string, map[string]string)) {
@@ -253,6 +277,7 @@ func (s *cacheSrv) setIndex(data []byte) {
 
 	s.mu.Lock()
 	s.index = index
+	s.known = make(map[string]string)
 	s.mu.Unlock()
 }
 
@@ -299,7 +324,7 @@ func (s *cacheSrv) refreshLoop(ctx context.Context) {
 				s.refreshIndex(ctx)
 			}).Catch(func(exc *Exception) {
 				if ctx.Err() == nil {
-					fmt.Fprintln(os.Stderr, "molot cache: index refresh failed, keeping previous index:", exc)
+					fmt.Fprintln(os.Stderr, "molot: index refresh failed, keeping previous index:", exc)
 				}
 			})
 		}
@@ -335,50 +360,54 @@ func (s *cacheSrv) handleBlob(w http.ResponseWriter, r *http.Request) {
 			ThrowHTTP(http.StatusNotFound, "uid not found")
 		}
 
-		key := fmt.Sprintf("%s/%s/result.zstd", s.s3Root, uid)
-		resp, err := s.s3.GetObject(r.Context(), &s3.GetObjectInput{
-			Bucket: aws.String(s.blobBucket),
-			Key:    aws.String(key),
-		})
-
-		if err != nil {
-			if isNotFound(err) {
-				ThrowHTTP(http.StatusNotFound, "uid not found")
-			}
-
-			Throw(err)
-		}
-
-		defer resp.Body.Close()
-
-		var body io.Reader = resp.Body
-
-		if resp.ContentLength == nil || *resp.ContentLength <= maxBlobKVSize {
-			data := Throw2(io.ReadAll(io.LimitReader(resp.Body, maxBlobKVSize+1)))
-
-			if len(data) <= maxBlobKVSize {
-				if resp.ContentLength != nil && int64(len(data)) != *resp.ContentLength {
-					Throw(io.ErrUnexpectedEOF)
-				}
-
-				Try(func() {
-					s.kv.put(r.Context(), uid, data)
-				}).Catch(func(exc *Exception) {
-					fmt.Fprintln(os.Stderr, "molot cache: KV PUT failed:", exc)
-				})
-			}
-
-			body = io.MultiReader(bytes.NewReader(data), resp.Body)
-		}
-
-		w.Header().Set("Content-Type", "application/zstd")
-
-		if resp.ContentLength != nil {
-			w.Header().Set("Content-Length", strconv.FormatInt(*resp.ContentLength, 10))
-		}
-
-		Throw2(io.Copy(w, body))
+		s.serveS3Blob(w, r, uid)
 	}).Catch(func(exc *Exception) {
 		sendCacheException(w, r, exc)
 	})
+}
+
+func (s *cacheSrv) serveS3Blob(w http.ResponseWriter, r *http.Request, uid string) {
+	key := fmt.Sprintf("%s/%s/result.zstd", s.s3Root, uid)
+	resp, err := s.s3.GetObject(r.Context(), &s3.GetObjectInput{
+		Bucket: aws.String(s.blobBucket),
+		Key:    aws.String(key),
+	})
+
+	if err != nil {
+		if isNotFound(err) {
+			ThrowHTTP(http.StatusNotFound, "uid not found")
+		}
+
+		Throw(err)
+	}
+
+	defer resp.Body.Close()
+
+	var body io.Reader = resp.Body
+
+	if resp.ContentLength == nil || *resp.ContentLength <= maxBlobKVSize {
+		data := Throw2(io.ReadAll(io.LimitReader(resp.Body, maxBlobKVSize+1)))
+
+		if len(data) <= maxBlobKVSize {
+			if resp.ContentLength != nil && int64(len(data)) != *resp.ContentLength {
+				Throw(io.ErrUnexpectedEOF)
+			}
+
+			Try(func() {
+				s.kv.put(r.Context(), uid, data)
+			}).Catch(func(exc *Exception) {
+				fmt.Fprintln(os.Stderr, "molot: KV PUT failed:", exc)
+			})
+		}
+
+		body = io.MultiReader(bytes.NewReader(data), resp.Body)
+	}
+
+	w.Header().Set("Content-Type", "application/zstd")
+
+	if resp.ContentLength != nil {
+		w.Header().Set("Content-Length", strconv.FormatInt(*resp.ContentLength, 10))
+	}
+
+	Throw2(io.Copy(w, body))
 }

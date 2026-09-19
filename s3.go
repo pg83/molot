@@ -5,10 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"math/rand/v2"
-	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -31,42 +28,6 @@ func newS3Client(cfg *Config) *s3.Client {
 
 		o.UsePathStyle = true
 	})
-}
-
-// s3StatExists answers definitively: yes the object exists, or no it
-// doesn't. Transient errors (5xx, network blips, MinIO mid-restart) are
-// retried with exponential backoff forever — surfacing a transient as
-// "missing" would let executor.go schedule a duplicate gorn task and
-// verifyResult treat a successful run as failed. Only modeled
-// NotFound/NoSuchKey terminate the loop with false.
-func s3StatExists(ctx context.Context, cli *s3.Client, bucket, key string) bool {
-	delay := time.Second
-	const maxDelay = 60 * time.Second
-
-	for {
-		_, err := cli.HeadObject(ctx, &s3.HeadObjectInput{
-			Bucket: aws.String(bucket),
-			Key:    aws.String(key),
-		})
-
-		if err == nil {
-			return true
-		}
-
-		if isNotFound(err) {
-			return false
-		}
-
-		sleep := delay/2 + time.Duration(rand.Int64N(int64(delay)))
-		fmt.Fprintln(os.Stderr, clr(clrY, fmt.Sprintf("s3 head s3://%s/%s transient error: %v, retrying in %v", bucket, key, err, sleep)))
-		time.Sleep(sleep)
-
-		delay *= 2
-
-		if delay > maxDelay {
-			delay = maxDelay
-		}
-	}
 }
 
 // isNotFound covers both modeled NotFound (HEAD) and NoSuchKey (GET) —

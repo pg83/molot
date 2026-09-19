@@ -23,7 +23,7 @@ Flags:
 const footer = `
 JSON config fields (any may be overridden by env or CLI):
   gorn_api, s3_bucket, s3_endpoint, aws_access_key_id,
-  aws_secret_access_key, aws_region, gorn_bin, dump, quiet
+  aws_secret_access_key, aws_region, gorn_bin, store_endpoint, resolve, dump, quiet
 
 Example:
   cd ix && IX_DUMP_GRAPH=1 IX_FLAGS='stalix=' ./ix build lib/c | molot
@@ -47,6 +47,10 @@ func main() {
 			return
 		case "cache":
 			runSubcommand(func() { cacheMain(os.Args[2:]) })
+
+			return
+		case "store":
+			runSubcommand(func() { storeMain(os.Args[2:]) })
 
 			return
 		case "stats":
@@ -88,7 +92,7 @@ func run() {
 	// stats every run before anyone noticed. Executing a graph without
 	// the shared index is a misconfiguration, not a degraded mode.
 	if len(parseResolveEndpoints(cfg.Resolve)) == 0 {
-		ThrowFmt("no cache resolve endpoints: set MOLOT_RESOLVE / IX_PACKAGE_CACHE or pass --resolve")
+		ThrowFmt("no store resolve endpoints: set MOLOT_RESOLVE / IX_PACKAGE_CACHE or pass --resolve")
 	}
 
 	g := readGraph(os.Stdin)

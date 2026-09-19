@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -24,7 +23,7 @@ import (
 // semantics, mount layout, or fetch/push contract — the bump
 // invalidates every cached artifact in the fleet, mirroring the role
 // the wrap.sh.tmpl hash used to play before the shell wrapper went away.
-const protocolVersion = "v2.exec.json.stdin.predict"
+const protocolVersion = "v3.exec.store"
 
 var tmplHash = func() string {
 	h := sha256.Sum256([]byte(protocolVersion))
@@ -54,12 +53,15 @@ func dispatchNode(ex *Executor, n *Node) {
 		"--root", ex.cfg.S3Root,
 		"--retry-error", strconv.Itoa(InfraExitCode),
 		"--slots", strconv.Itoa(slots),
+		// Keep the old worker environment during the rolling upgrade. New exec
+		// uses only MOLOT_STORE_ENDPOINT for artifact transfers.
 		"--env", "AWS_ACCESS_KEY_ID=" + ex.cfg.AWSKey,
 		"--env", "AWS_SECRET_ACCESS_KEY=" + ex.cfg.AWSSecret,
 		"--env", "AWS_REGION=" + ex.cfg.AWSRegion,
 		"--env", "S3_ENDPOINT=" + ex.cfg.S3Endpt,
 		"--env", "S3_BUCKET=" + ex.cfg.S3Bucket,
 		"--env", "MOLOT_S3_ROOT=" + ex.cfg.S3Root,
+		"--env", "MOLOT_STORE_ENDPOINT=" + ex.cfg.StoreEndpoint,
 		"--", "molot", "exec",
 	}
 
@@ -91,8 +93,6 @@ func dispatchNode(ex *Executor, n *Node) {
 		err := cmd.Run()
 
 		if err == nil {
-			verifyResult(ex, n)
-
 			return
 		}
 
@@ -134,25 +134,6 @@ func dispatchNode(ex *Executor, n *Node) {
 
 		ThrowFmt("node %s (out=%s) failed via gorn ignite: %v", n.UID, n.OutDirs[0], err)
 	}
-}
-
-// verifyResult HEAD-checks that the producer actually uploaded
-// result.zstd for this node. gorn considers a task "done" the moment
-// result.json lands — but the tar+upload happens *after* that in
-// `molot exec`, so a kill/OOM/disk-full between exit and upload leaves
-// gorn happy (exit=0, result.json present) with no artifact. Downstream
-// nodes then fail when they try to pull the missing dep, hundreds of
-// lines away from the real cause. Failing here, on the producer itself,
-// makes the root cause obvious.
-func verifyResult(ex *Executor, n *Node) {
-	key := ex.cfg.ResultObjectKey(n.UID)
-
-	if s3StatExists(context.Background(), ex.cfg.S3Cli, ex.cfg.S3Bucket, key) {
-		return
-	}
-
-	ThrowFmt("node %s (out=%s): gorn reported success but result.zstd is missing at s3://%s/%s",
-		n.UID, n.OutDirs[0], ex.cfg.S3Bucket, key)
 }
 
 func buildExecJSON(n *Node) string {

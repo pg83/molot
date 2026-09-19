@@ -14,9 +14,8 @@ import (
 )
 
 // Cache is the in-memory set of completed gorn GUIDs. It is seeded once
-// from a molot cache server's /v1/resolve and grows as this run finishes
-// nodes; s3StatExists in the executor backstops anything the index has
-// not caught up with yet.
+// from a molot store's authoritative /v1/resolve and grows as this run
+// finishes nodes.
 type Cache struct {
 	mu  sync.Mutex
 	set map[string]bool
@@ -86,15 +85,17 @@ func resolveFromEndpoint(endpoint string, payload []byte) []string {
 	return available
 }
 
-// resolveCompleted asks the first answering cache endpoint which of the
-// graph's uids already have a result. Every failure is non-fatal: with
-// no answer the run starts from an empty set and the executor falls back
-// to per-node S3 stats.
+// resolveCompleted uses the first successful authoritative answer. When all
+// stores fail, the graph must not be scheduled as though every UID were absent.
 func resolveCompleted(raw string, uids []string) map[string]bool {
 	result := map[string]bool{}
 	endpoints := parseResolveEndpoints(raw)
 
-	if len(endpoints) == 0 || len(uids) == 0 {
+	if len(endpoints) == 0 {
+		ThrowFmt("no store resolve endpoints")
+	}
+
+	if len(uids) == 0 {
 		return result
 	}
 
@@ -116,7 +117,7 @@ func resolveCompleted(raw string, uids []string) map[string]bool {
 		fmt.Fprintf(os.Stderr, "molot exec: resolve %s: %v, trying next endpoint\n", endpoint, exc)
 	}
 
-	fmt.Fprintln(os.Stderr, "molot exec: no usable resolve endpoints, falling back to per-node S3 stats")
+	ThrowFmt("molot exec: no usable authoritative resolve endpoints")
 
 	return result
 }
