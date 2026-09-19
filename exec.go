@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,8 @@ import (
 )
 
 // InfraExitCode is the exit code molot exec uses when an infra phase
-// (namespace setup, dep fetch, output push) fails. Paired with
+// (namespace setup, dep fetch, output push) fails, except a missing
+// dependency (HTTP 404), which cannot be fixed by retrying the consumer. Paired with
 // `gorn ignite --retry-error 100` so gorn classifies this exit as
 // retriable, leaves the task on the queue, and skips writing the
 // canonical result.json — next dispatch re-runs from scratch. Any
@@ -53,7 +55,7 @@ func execMain(args []string) {
 		fetchDeps(store, cwd, task.InDirs)
 	}).Catch(func(exc *Exception) {
 		fmt.Fprintln(os.Stderr, "molot exec: infra (setup/fetch):", exc.Error())
-		os.Exit(InfraExitCode)
+		os.Exit(fetchFailureExitCode(exc))
 	})
 
 	Try(func() {
@@ -82,6 +84,16 @@ func execMain(args []string) {
 		fmt.Fprintln(os.Stderr, "molot exec: infra (push):", exc.Error())
 		os.Exit(InfraExitCode)
 	})
+}
+
+func fetchFailureExitCode(exc *Exception) int {
+	var status *HTTPError
+
+	if errors.As(exc, &status) && status.Status == http.StatusNotFound {
+		return 1
+	}
+
+	return InfraExitCode
 }
 
 func readExecTask(args []string) ExecTask {

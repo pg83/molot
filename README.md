@@ -30,6 +30,10 @@ content-addressed cache, but Molot stops waiting for the rest of the graph.
 Set `IX_KEEP_GOING=yes` to keep traversing independent branches and report all
 failures plus nodes broken by failed dependencies.
 
+If a dependency download returns HTTP 404, `molot exec` exits with status 1:
+retrying the consumer cannot rebuild its missing input. Transport errors and
+server failures retain status 100 and Gorn's infrastructure retry behavior.
+
 Set `MOLOT_DUMP=1` to print the task JSON sent to Gorn.
 
 ## Internal artifact store

@@ -59,6 +59,18 @@ func TestStoreClientEscapesUIDAndPropagatesErrors(t *testing.T) {
 			if status == http.StatusOK && data.String() != "archive" {
 				t.Fatalf("download=%q", data.String())
 			}
+
+			if exc != nil {
+				want := InfraExitCode
+
+				if status == http.StatusNotFound {
+					want = 1
+				}
+
+				if got := fetchFailureExitCode(exc); got != want {
+					t.Fatalf("HTTP %d: worker exit=%d, want %d", status, got, want)
+				}
+			}
 		})
 	}
 }
@@ -85,6 +97,10 @@ func TestStoreClientPUTFailuresAndCancellation(t *testing.T) {
 
 	if !errors.Is(exc.AsError(), context.Canceled) {
 		t.Fatalf("cancellation error=%v", exc)
+	}
+
+	if got := fetchFailureExitCode(exc); got != InfraExitCode {
+		t.Fatalf("transport error: worker exit=%d, want %d", got, InfraExitCode)
 	}
 }
 

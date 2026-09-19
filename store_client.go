@@ -46,7 +46,7 @@ func (s *storeClient) get(ctx context.Context, uid string, dst io.Writer) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		ThrowFmt("store GET %s: HTTP %d", uid, resp.StatusCode)
+		ThrowHTTP(resp.StatusCode, "store GET %s: HTTP %d", uid, resp.StatusCode)
 	}
 
 	Throw2(io.Copy(dst, resp.Body))
