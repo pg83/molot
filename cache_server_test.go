@@ -97,6 +97,7 @@ func TestCacheLoadIndexThrowsOriginalError(t *testing.T) {
 
 func newTestCacheSrv(s3cli objectGetter, indexPath string) *cacheSrv {
 	return &cacheSrv{
+		command:     "cache",
 		s3:          s3cli,
 		blobBucket:  "molot",
 		s3Root:      "molot",

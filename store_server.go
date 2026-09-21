@@ -7,9 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -39,20 +38,21 @@ func (s *storeSrv) routes() *http.ServeMux {
 }
 
 func (s *storeSrv) handleResolve(w http.ResponseWriter, r *http.Request) {
-	s.serveResolve(w, r, func(w http.ResponseWriter, requested []string, index map[string]string) {
-		writeResolveV1(w, requested, s.resolve(r.Context(), requested, index))
+	s.serveResolve(w, r, func(w http.ResponseWriter, requested []string, index map[string]string) int {
+		return writeResolveV1(w, requested, s.resolve(r.Context(), requested, index))
 	})
 }
 
 func (s *storeSrv) handleResolveV2(w http.ResponseWriter, r *http.Request) {
-	s.serveResolve(w, r, func(w http.ResponseWriter, requested []string, index map[string]string) {
-		writeResolveV2(w, requested, s.resolve(r.Context(), requested, index))
+	s.serveResolve(w, r, func(w http.ResponseWriter, requested []string, index map[string]string) int {
+		return writeResolveV2(w, requested, s.resolve(r.Context(), requested, index))
 	})
 }
 
 func (s *storeSrv) resolve(ctx context.Context, requested []string, index map[string]string) map[string]string {
 	available := make(map[string]string, len(requested))
 	checked := make(map[string]bool, len(requested))
+	var fromIndex, fromKnown, fromHead, missing int
 
 	for _, uid := range requested {
 		if !validCacheUID(uid) {
@@ -69,6 +69,7 @@ func (s *storeSrv) resolve(ctx context.Context, requested []string, index map[st
 
 		if digest, ok := index[uid]; ok {
 			available[uid] = digest
+			fromIndex++
 
 			continue
 		}
@@ -79,6 +80,7 @@ func (s *storeSrv) resolve(ctx context.Context, requested []string, index map[st
 
 		if known {
 			available[uid] = digest
+			fromKnown++
 
 			continue
 		}
@@ -89,17 +91,22 @@ func (s *storeSrv) resolve(ctx context.Context, requested []string, index map[st
 		})
 
 		if isNotFound(err) {
+			missing++
+
 			continue
 		}
 
 		Throw(err)
 		digest = etagMD5(aws.ToString(object.ETag))
 		available[uid] = digest
+		fromHead++
 
 		s.mu.Lock()
 		s.known[uid] = digest
 		s.mu.Unlock()
 	}
+
+	s.logf("resolve: unique=%d index=%d known=%d s3head=%d missing=%d", len(checked), fromIndex, fromKnown, fromHead, missing)
 
 	return available
 }
@@ -144,24 +151,23 @@ func (s *storeSrv) handleBlob(w http.ResponseWriter, r *http.Request) {
 		Try(func() {
 			data = s.kv.get(r.Context(), uid)
 		}).Catch(func(exc *Exception) {
-			fmt.Fprintln(os.Stderr, "molot store: KV GET failed:", exc)
+			s.logf("KV GET %s failed: %v", uid, exc)
 		})
 
 		if data != nil {
-			w.Header().Set("Content-Type", "application/zstd")
-			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-			Throw2(w.Write(data))
+			s.serveKVBlob(w, r, uid, data)
 
 			return
 		}
 
 		s.serveS3Blob(w, r, uid)
 	}).Catch(func(exc *Exception) {
-		sendCacheException(w, r, exc)
+		s.sendException(w, r, exc)
 	})
 }
 
 func (s *storeSrv) putBlob(r *http.Request, uid string) {
+	started := time.Now()
 	data := Throw2(io.ReadAll(r.Body))
 	Throw2(s.storage.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:        aws.String(s.blobBucket),
@@ -170,4 +176,5 @@ func (s *storeSrv) putBlob(r *http.Request, uid string) {
 		ContentLength: aws.Int64(int64(len(data))),
 		ContentType:   aws.String("application/zstd"),
 	}))
+	s.logf("PUT %s from %s: stored bytes=%d in %s", r.URL.Path, r.RemoteAddr, len(data), time.Since(started).Round(time.Millisecond))
 }

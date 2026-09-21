@@ -29,6 +29,7 @@ type objectGetter interface {
 }
 
 type cacheSrv struct {
+	command     string
 	s3          objectGetter
 	kv          *blobKV
 	blobBucket  string
@@ -99,6 +100,7 @@ func artifactServerMain(command string, args []string) {
 	kv := newBlobKV(*kvEndpoint, *kvBucket, Throw2(time.ParseDuration(*kvTimeout)))
 	cfg := loadS3Config()
 	srv := &cacheSrv{
+		command:     command,
 		s3:          cfg.S3Cli,
 		kv:          kv,
 		blobBucket:  cfg.S3Bucket,
@@ -160,17 +162,21 @@ func artifactServerMain(command string, args []string) {
 	}
 }
 
-func sendCacheException(w http.ResponseWriter, r *http.Request, e *Exception) {
+func (s *cacheSrv) logf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "molot "+s.command+": "+format+"\n", args...)
+}
+
+func (s *cacheSrv) sendException(w http.ResponseWriter, r *http.Request, e *Exception) {
 	var he *HTTPError
 
 	if errors.As(e.AsError(), &he) {
+		s.logf("%s %s from %s: %d %s", r.Method, r.URL.Path, r.RemoteAddr, he.Status, he.Msg)
 		httpError(w, he.Status, he.Msg)
 
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "molot: %s %s: %s\n", r.Method, r.URL.Path, e.Error())
-
+	s.logf("%s %s from %s: 500 %s", r.Method, r.URL.Path, r.RemoteAddr, e.Error())
 	httpError(w, http.StatusInternalServerError, e.Error())
 }
 
@@ -181,7 +187,7 @@ func (s *cacheSrv) handleResolveV2(w http.ResponseWriter, r *http.Request) {
 	s.serveResolve(w, r, writeResolveV2)
 }
 
-func writeResolveV2(w http.ResponseWriter, requested []string, index map[string]string) {
+func writeResolveV2(w http.ResponseWriter, requested []string, index map[string]string) int {
 	available := make(map[string]string, len(requested))
 
 	for _, uid := range requested {
@@ -192,13 +198,15 @@ func writeResolveV2(w http.ResponseWriter, requested []string, index map[string]
 
 	w.Header().Set("Content-Type", "application/json")
 	Throw(json.NewEncoder(w).Encode(available))
+
+	return len(available)
 }
 
 func (s *cacheSrv) handleResolve(w http.ResponseWriter, r *http.Request) {
 	s.serveResolve(w, r, writeResolveV1)
 }
 
-func writeResolveV1(w http.ResponseWriter, requested []string, index map[string]string) {
+func writeResolveV1(w http.ResponseWriter, requested []string, index map[string]string) int {
 	available := make([]string, 0, len(requested))
 
 	for _, uid := range requested {
@@ -209,9 +217,13 @@ func writeResolveV1(w http.ResponseWriter, requested []string, index map[string]
 
 	w.Header().Set("Content-Type", "application/json")
 	Throw(json.NewEncoder(w).Encode(available))
+
+	return len(available)
 }
 
-func (s *cacheSrv) serveResolve(w http.ResponseWriter, r *http.Request, respond func(http.ResponseWriter, []string, map[string]string)) {
+func (s *cacheSrv) serveResolve(w http.ResponseWriter, r *http.Request, respond func(http.ResponseWriter, []string, map[string]string) int) {
+	started := time.Now()
+
 	Try(func() {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
@@ -226,9 +238,11 @@ func (s *cacheSrv) serveResolve(w http.ResponseWriter, r *http.Request, respond 
 		}
 
 		s.stats.put(requested)
-		respond(w, requested, s.indexSnapshot())
+		available := respond(w, requested, s.indexSnapshot())
+		s.logf("%s %s from %s: requested=%d available=%d missing=%d in %s",
+			r.Method, r.URL.Path, r.RemoteAddr, len(requested), available, len(requested)-available, time.Since(started).Round(time.Millisecond))
 	}).Catch(func(exc *Exception) {
-		sendCacheException(w, r, exc)
+		s.sendException(w, r, exc)
 	})
 }
 
@@ -301,6 +315,7 @@ func (s *cacheSrv) refreshIndex(ctx context.Context) {
 	data := s.loadIndex(ctx)
 	writeIndex(s.indexPath, data)
 	s.setIndex(data)
+	s.logf("index refreshed: %d uids", len(s.indexSnapshot()))
 }
 
 func (s *cacheSrv) indexSnapshot() map[string]string {
@@ -324,7 +339,7 @@ func (s *cacheSrv) refreshLoop(ctx context.Context) {
 				s.refreshIndex(ctx)
 			}).Catch(func(exc *Exception) {
 				if ctx.Err() == nil {
-					fmt.Fprintln(os.Stderr, "molot: index refresh failed, keeping previous index:", exc)
+					s.logf("index refresh failed, keeping previous index: %v", exc)
 				}
 			})
 		}
@@ -349,9 +364,7 @@ func (s *cacheSrv) handleBlob(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if data := s.kv.get(r.Context(), uid); data != nil {
-			w.Header().Set("Content-Type", "application/zstd")
-			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-			Throw2(w.Write(data))
+			s.serveKVBlob(w, r, uid, data)
 
 			return
 		}
@@ -362,11 +375,21 @@ func (s *cacheSrv) handleBlob(w http.ResponseWriter, r *http.Request) {
 
 		s.serveS3Blob(w, r, uid)
 	}).Catch(func(exc *Exception) {
-		sendCacheException(w, r, exc)
+		s.sendException(w, r, exc)
 	})
 }
 
+func (s *cacheSrv) serveKVBlob(w http.ResponseWriter, r *http.Request, uid string, data []byte) {
+	started := time.Now()
+
+	w.Header().Set("Content-Type", "application/zstd")
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	Throw2(w.Write(data))
+	s.logf("GET %s from %s: kv hit bytes=%d in %s", r.URL.Path, r.RemoteAddr, len(data), time.Since(started).Round(time.Millisecond))
+}
+
 func (s *cacheSrv) serveS3Blob(w http.ResponseWriter, r *http.Request, uid string) {
+	started := time.Now()
 	key := fmt.Sprintf("%s/%s/result.zstd", s.s3Root, uid)
 	resp, err := s.s3.GetObject(r.Context(), &s3.GetObjectInput{
 		Bucket: aws.String(s.blobBucket),
@@ -384,6 +407,7 @@ func (s *cacheSrv) serveS3Blob(w http.ResponseWriter, r *http.Request, uid strin
 	defer resp.Body.Close()
 
 	var body io.Reader = resp.Body
+	warmed := "skipped"
 
 	if resp.ContentLength == nil || *resp.ContentLength <= maxBlobKVSize {
 		data := Throw2(io.ReadAll(io.LimitReader(resp.Body, maxBlobKVSize+1)))
@@ -393,10 +417,13 @@ func (s *cacheSrv) serveS3Blob(w http.ResponseWriter, r *http.Request, uid strin
 				Throw(io.ErrUnexpectedEOF)
 			}
 
+			warmed = "warmed"
+
 			Try(func() {
 				s.kv.put(r.Context(), uid, data)
 			}).Catch(func(exc *Exception) {
-				fmt.Fprintln(os.Stderr, "molot: KV PUT failed:", exc)
+				warmed = "failed"
+				s.logf("KV PUT %s failed: %v", uid, exc)
 			})
 		}
 
@@ -409,5 +436,6 @@ func (s *cacheSrv) serveS3Blob(w http.ResponseWriter, r *http.Request, uid strin
 		w.Header().Set("Content-Length", strconv.FormatInt(*resp.ContentLength, 10))
 	}
 
-	Throw2(io.Copy(w, body))
+	written := Throw2(io.Copy(w, body))
+	s.logf("GET %s from %s: s3 hit bytes=%d kv=%s in %s", r.URL.Path, r.RemoteAddr, written, warmed, time.Since(started).Round(time.Millisecond))
 }
