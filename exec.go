@@ -182,12 +182,9 @@ func fetchDeps(store *storeClient, cwd string, ins []string) {
 		f := Throw2(os.Create(arch))
 		defer f.Close()
 		store.get(context.Background(), uid, f)
+		Throw2(f.Seek(0, io.SeekStart))
+		extractArchive(f, in)
 		Throw(f.Close())
-
-		untar := exec.Command("tar", "--use-compress-program=unzstd", "-xf", arch, "-C", in)
-		untar.Stdout = os.Stdout
-		untar.Stderr = os.Stderr
-		Throw(untar.Run())
 
 		Throw(os.Remove(arch))
 	}
@@ -277,13 +274,10 @@ func verifyPredict(t ExecTask) {
 func pushOutput(store *storeClient, cwd string, t ExecTask) {
 	out := cwd + "/out.tar.zst"
 
-	tar := exec.Command("tar", "--use-compress-program=zstd", "-cf", out, "-C", t.OutDir, ".")
-	tar.Stdout = os.Stdout
-	tar.Stderr = os.Stderr
-	Throw(tar.Run())
-
-	f := Throw2(os.Open(out))
+	f := Throw2(os.Create(out))
 	defer f.Close()
+	createArchive(f, t.OutDir)
+	Throw2(f.Seek(0, io.SeekStart))
 
 	store.put(context.Background(), t.UID, f)
 }

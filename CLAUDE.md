@@ -64,7 +64,7 @@ The incoming graph **must** be produced with `IX_FLAGS='stalix='` (set in the en
 
 ## Worker assumptions
 
-- Full stalix toolchain available (`sh`, `tar`, `zstd`, `unzstd`, `minio-client`, `unshare`, `mount`, `mkdir`, `rm`, `printf`, `base64`, `env`, `mktemp`, `chmod`, `cat`).
+- `molot exec` unpacks dependency blobs and packs the output itself (`archive.go`, archive/tar + klauspost zstd). It must not shell out to host `tar`/`zstd`: those are symlinks into `/ix/store`, and the overlay hides every in_dir before the fetch — a node depending on the host realm's own zstd build would lose `unzstd` mid-fetch (kernel builds, 2026-09-24).
 - Kernel allows unprivileged user namespaces and overlayfs with `userxattr` (Linux 5.11+).
 - `/ix` exists as a directory (so we can `mount --bind $T/ix /ix`). Its original contents are hidden inside our mount ns; the host's real `/ix` is not modified.
 - S3 auth: the script builds `MC_HOST_molot="<scheme>://<key>:<secret>@<host>"` from the AWS_* env vars forwarded by the executor; no `~/.mc/config.json` on disk. Access keys must not contain `@` or `:` — if they do, switch to `minio-client alias set` (writes to `$HOME/.mc/`).
