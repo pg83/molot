@@ -65,7 +65,6 @@ func TestCacheHTTPExceptionBoundary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeObjectGetter{err: errors.New("storage unavailable")}
 			srv := newTestCacheSrv(fake, "")
-			srv.kv = testBlobKVMiss(t)
 			srv.setIndex([]byte("one\n"))
 			res := httptest.NewRecorder()
 			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
@@ -176,7 +175,6 @@ func TestCacheBlobStreamsObjectAndDistinguishesNotFound(t *testing.T) {
 		"molot/molot/one/result.zstd": []byte("blob"),
 	}}
 	srv := newTestCacheSrv(fake, filepath.Join(t.TempDir(), "complete"))
-	srv.kv = testBlobKVMiss(t)
 	srv.setIndex([]byte("one\nmissing\n"))
 
 	res := httptest.NewRecorder()
@@ -194,12 +192,11 @@ func TestCacheBlobStreamsObjectAndDistinguishesNotFound(t *testing.T) {
 	}
 }
 
-func TestCacheBlobKVMissRequiresCurrentIndex(t *testing.T) {
+func TestCacheBlobRequiresCurrentIndex(t *testing.T) {
 	fake := &fakeObjectGetter{objects: map[string][]byte{
 		"molot/molot/one/result.zstd": []byte("blob"),
 	}}
 	srv := newTestCacheSrv(fake, filepath.Join(t.TempDir(), "complete"))
-	srv.kv = testBlobKVMiss(t)
 
 	for _, tc := range []struct {
 		name   string

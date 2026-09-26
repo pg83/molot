@@ -16,7 +16,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -97,7 +96,6 @@ func newTestStore(t *testing.T) (*storeSrv, *fakeStoreObjects) {
 	t.Helper()
 	fake := &fakeStoreObjects{objects: make(map[string][]byte), heads: make(map[string]int)}
 	base := newTestCacheSrv(fake, filepath.Join(t.TempDir(), "complete"))
-	base.kv = testBlobKVMiss(t)
 	base.setIndex(nil)
 
 	return &storeSrv{cacheSrv: base, storage: fake}, fake
@@ -110,92 +108,38 @@ func storeRequest(s *storeSrv, method, path, body string) *httptest.ResponseReco
 	return w
 }
 
-func TestStoreGETFallsThroughKVFailuresWithoutIndex(t *testing.T) {
-	for _, status := range []int{http.StatusNotFound, http.StatusInternalServerError, http.StatusNoContent, http.StatusTemporaryRedirect} {
-		t.Run(fmt.Sprint(status), func(t *testing.T) {
-			srv, fake := newTestStore(t)
-			fake.objects["molot/molot/one/result.zstd"] = []byte("archive")
-			var gets, puts atomic.Int32
-			srv.kv = testBlobKV(t, func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == http.MethodGet {
-					gets.Add(1)
-				} else {
-					puts.Add(1)
-				}
-
-				w.WriteHeader(status)
-			})
-			res := storeRequest(srv, http.MethodGet, "/v1/blob/one", "")
-
-			if res.Code != http.StatusOK || res.Body.String() != "archive" || fake.gets != 1 || gets.Load() != 1 || puts.Load() != 1 {
-				t.Fatalf("status=%d body=%q S3 GETs=%d KV GETs=%d PUTs=%d", res.Code, res.Body, fake.gets, gets.Load(), puts.Load())
-			}
-		})
-	}
-
+func TestStoreGETReadsS3WithoutIndex(t *testing.T) {
 	srv, fake := newTestStore(t)
 	fake.objects["molot/molot/one/result.zstd"] = []byte("archive")
-	srv.kv = newBlobKV("http://127.0.0.1:1", "molot", time.Second)
 	res := storeRequest(srv, http.MethodGet, "/v1/blob/one", "")
 
-	if res.Code != http.StatusOK || res.Body.String() != "archive" {
-		t.Fatalf("transport failure: status=%d body=%q", res.Code, res.Body)
+	if res.Code != http.StatusOK || res.Body.String() != "archive" || fake.gets != 1 {
+		t.Fatalf("status=%d body=%q S3 GETs=%d", res.Code, res.Body, fake.gets)
+	}
+
+	res = storeRequest(srv, http.MethodGet, "/v1/blob/missing", "")
+
+	if res.Code != http.StatusNotFound || fake.gets != 2 {
+		t.Fatalf("missing: status=%d S3 GETs=%d", res.Code, fake.gets)
 	}
 }
 
-func TestStoreGETWarmsKVThenReadsIt(t *testing.T) {
+func TestStorePUTBuffersBodyOfUnknownLength(t *testing.T) {
 	srv, fake := newTestStore(t)
-	fake.objects["molot/molot/one/result.zstd"] = []byte("archive")
-	var mu sync.Mutex
-	var data []byte
-	srv.kv = testBlobKV(t, func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-
-		if r.Method == http.MethodPut {
-			data = Throw2(io.ReadAll(r.Body))
-			w.WriteHeader(http.StatusNoContent)
-		} else if data == nil {
-			w.WriteHeader(http.StatusNotFound)
-		} else {
-			w.Write(data)
-		}
-	})
-
-	for range 2 {
-		res := storeRequest(srv, http.MethodGet, "/v1/blob/one", "")
-
-		if res.Code != http.StatusOK || res.Body.String() != "archive" {
-			t.Fatalf("status=%d body=%q", res.Code, res.Body)
-		}
-	}
-
-	if fake.gets != 1 || len(fake.heads) != 0 {
-		t.Fatalf("S3 GETs=%d HEADs=%v", fake.gets, fake.heads)
-	}
-}
-
-func TestStorePUTDoesNotTouchKV(t *testing.T) {
-	srv, fake := newTestStore(t)
-	var calls atomic.Int32
-	srv.kv = testBlobKV(t, func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		w.WriteHeader(http.StatusInternalServerError)
-	})
 	// Unknown request length is accepted; the buffered body supplies the S3 length.
 	req := httptest.NewRequest(http.MethodPut, "/v1/blob/one+two&three", io.NopCloser(strings.NewReader("archive")))
 	res := httptest.NewRecorder()
 	srv.handleBlob(res, req)
 
-	if res.Code != http.StatusNoContent || string(fake.objects["molot/molot/one+two&three/result.zstd"]) != "archive" || calls.Load() != 0 {
-		t.Fatalf("status=%d objects=%v KV calls=%d", res.Code, fake.objects, calls.Load())
+	if res.Code != http.StatusNoContent || string(fake.objects["molot/molot/one+two&three/result.zstd"]) != "archive" {
+		t.Fatalf("status=%d objects=%v", res.Code, fake.objects)
 	}
 
 	fake.err = errors.New("S3 unavailable")
 	res = storeRequest(srv, http.MethodPut, "/v1/blob/two", "archive")
 
-	if res.Code != http.StatusInternalServerError || calls.Load() != 0 {
-		t.Fatalf("failed upload: status=%d KV calls=%d", res.Code, calls.Load())
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("failed upload: status=%d", res.Code)
 	}
 }
 
@@ -221,7 +165,6 @@ func TestStorePUTSDKRetriesBufferedBody(t *testing.T) {
 	defer backend.Close()
 	srv, _ := newTestStore(t)
 	srv.storage = newS3Client(&Config{S3Endpt: backend.URL, AWSRegion: "us-east-1", AWSKey: "test", AWSSecret: "test"})
-	srv.kv = nil // PUT must not use KV, even after a retry.
 	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "must-not-create-files"))
 	res := httptest.NewRecorder()
 	srv.handleBlob(res, httptest.NewRequest(http.MethodPut, "/v1/blob/one", bytes.NewReader(data)))
@@ -249,7 +192,6 @@ func TestStorePUTReadFailureDoesNotWriteS3(t *testing.T) {
 
 func TestStoreResolveIsAuthoritativeAndCachesOnlyPositiveResults(t *testing.T) {
 	srv, fake := newTestStore(t)
-	srv.kv = nil // Resolve never uses the byte cache.
 	srv.setIndex([]byte("indexed\n"))
 	fake.objects["molot/molot/fresh/result.zstd"] = []byte("archive")
 	digest := fmt.Sprintf("%x", md5.Sum([]byte("archive")))
@@ -349,12 +291,12 @@ func TestStoreResolveETagAttestation(t *testing.T) {
 }
 
 func TestStoreRequiresExplicitSettings(t *testing.T) {
-	for _, name := range []string{"INDEX_BUCKET", "INDEX_KEY", "KV_ENDPOINT", "KV_BUCKET", "KV_TIMEOUT"} {
+	for _, name := range []string{"INDEX_BUCKET", "INDEX_KEY"} {
 		t.Setenv("MOLOT_STORE_"+name, "")
 	}
 
 	settings := []string{"--listen", "127.0.0.1:0", "--index-bucket", "molot", "--index-key", "complete",
-		"--index-ttl", "30s", "--kv-endpoint", "http://127.0.0.1:1", "--kv-bucket", "molot", "--kv-timeout", "1s"}
+		"--index-ttl", "30s"}
 
 	for omitted := 0; omitted < len(settings); omitted += 2 {
 		args := append([]string{}, settings[:omitted]...)

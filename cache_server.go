@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,7 +30,6 @@ type objectGetter interface {
 type cacheSrv struct {
 	command     string
 	s3          objectGetter
-	kv          *blobKV
 	blobBucket  string
 	s3Root      string
 	indexBucket string
@@ -75,9 +73,6 @@ func artifactServerMain(command string, args []string) {
 	indexBucket := fs.String("index-bucket", indexBucketValue, "S3 bucket containing the uid index")
 	indexKey := fs.String("index-key", indexKeyValue, "S3 object containing one uid per line")
 	indexTTL := fs.Duration("index-ttl", indexInterval, "positive background uid index refresh interval (required for store)")
-	kvEndpoint := fs.String("kv-endpoint", os.Getenv(prefix+"KV_ENDPOINT"), "required KV front URL")
-	kvBucket := fs.String("kv-bucket", os.Getenv(prefix+"KV_BUCKET"), "required KV bucket for artifact bytes")
-	kvTimeout := fs.String("kv-timeout", os.Getenv(prefix+"KV_TIMEOUT"), "required positive KV request timeout, as a Go duration")
 
 	Throw(fs.Parse(args))
 
@@ -93,16 +88,10 @@ func artifactServerMain(command string, args []string) {
 		ThrowFmt("%s: --index-ttl must be positive", command)
 	}
 
-	if *kvEndpoint == "" || *kvBucket == "" || *kvTimeout == "" {
-		ThrowFmt("%s: --kv-endpoint, --kv-bucket and --kv-timeout are required", command)
-	}
-
-	kv := newBlobKV(*kvEndpoint, *kvBucket, Throw2(time.ParseDuration(*kvTimeout)))
 	cfg := loadS3Config()
 	srv := &cacheSrv{
 		command:     command,
 		s3:          cfg.S3Cli,
-		kv:          kv,
 		blobBucket:  cfg.S3Bucket,
 		s3Root:      cfg.S3Root,
 		indexBucket: *indexBucket,
@@ -363,12 +352,6 @@ func (s *cacheSrv) handleBlob(w http.ResponseWriter, r *http.Request) {
 			ThrowHTTP(http.StatusBadRequest, "bad uid")
 		}
 
-		if data := s.kv.get(r.Context(), uid); data != nil {
-			s.serveKVBlob(w, r, uid, data)
-
-			return
-		}
-
 		if _, indexed := s.indexSnapshot()[uid]; !indexed {
 			ThrowHTTP(http.StatusNotFound, "uid not found")
 		}
@@ -377,15 +360,6 @@ func (s *cacheSrv) handleBlob(w http.ResponseWriter, r *http.Request) {
 	}).Catch(func(exc *Exception) {
 		s.sendException(w, r, exc)
 	})
-}
-
-func (s *cacheSrv) serveKVBlob(w http.ResponseWriter, r *http.Request, uid string, data []byte) {
-	started := time.Now()
-
-	w.Header().Set("Content-Type", "application/zstd")
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	Throw2(w.Write(data))
-	s.logf("GET %s from %s: kv hit bytes=%d in %s", r.URL.Path, r.RemoteAddr, len(data), time.Since(started).Round(time.Millisecond))
 }
 
 func (s *cacheSrv) serveS3Blob(w http.ResponseWriter, r *http.Request, uid string) {
@@ -406,36 +380,12 @@ func (s *cacheSrv) serveS3Blob(w http.ResponseWriter, r *http.Request, uid strin
 
 	defer resp.Body.Close()
 
-	var body io.Reader = resp.Body
-	warmed := "skipped"
-
-	if resp.ContentLength == nil || *resp.ContentLength <= maxBlobKVSize {
-		data := Throw2(io.ReadAll(io.LimitReader(resp.Body, maxBlobKVSize+1)))
-
-		if len(data) <= maxBlobKVSize {
-			if resp.ContentLength != nil && int64(len(data)) != *resp.ContentLength {
-				Throw(io.ErrUnexpectedEOF)
-			}
-
-			warmed = "warmed"
-
-			Try(func() {
-				s.kv.put(r.Context(), uid, data)
-			}).Catch(func(exc *Exception) {
-				warmed = "failed"
-				s.logf("KV PUT %s failed: %v", uid, exc)
-			})
-		}
-
-		body = io.MultiReader(bytes.NewReader(data), resp.Body)
-	}
-
 	w.Header().Set("Content-Type", "application/zstd")
 
 	if resp.ContentLength != nil {
 		w.Header().Set("Content-Length", strconv.FormatInt(*resp.ContentLength, 10))
 	}
 
-	written := Throw2(io.Copy(w, body))
-	s.logf("GET %s from %s: s3 hit bytes=%d kv=%s in %s", r.URL.Path, r.RemoteAddr, written, warmed, time.Since(started).Round(time.Millisecond))
+	written := Throw2(io.Copy(w, resp.Body))
+	s.logf("GET %s from %s: s3 hit bytes=%d in %s", r.URL.Path, r.RemoteAddr, written, time.Since(started).Round(time.Millisecond))
 }

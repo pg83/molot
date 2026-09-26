@@ -50,8 +50,7 @@ func TestStoreResolvePersistsStats(t *testing.T) {
 	listener := Throw2(net.Listen("tcp", "127.0.0.1:0"))
 	address := listener.Addr().String()
 	Throw(listener.Close())
-	args := []string{"--listen", address, "--index-bucket", "cix", "--index-key", "complete", "--index-ttl", "1h",
-		"--kv-endpoint", "http://127.0.0.1:1", "--kv-bucket", "molot", "--kv-timeout", "1s"}
+	args := []string{"--listen", address, "--index-bucket", "cix", "--index-key", "complete", "--index-ttl", "1h"}
 	encoded := Throw2(json.Marshal(args))
 	cmd := exec.Command(os.Args[0], "-test.run=^TestStoreResolvePersistsStats$")
 	cmd.Env = append(os.Environ(), "MOLOT_STORE_TEST_CHILD=1", "MOLOT_STORE_TEST_ARGS="+string(encoded),

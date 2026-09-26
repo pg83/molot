@@ -146,20 +146,6 @@ func (s *storeSrv) handleBlob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		var data []byte
-
-		Try(func() {
-			data = s.kv.get(r.Context(), uid)
-		}).Catch(func(exc *Exception) {
-			s.logf("KV GET %s failed: %v", uid, exc)
-		})
-
-		if data != nil {
-			s.serveKVBlob(w, r, uid, data)
-
-			return
-		}
-
 		s.serveS3Blob(w, r, uid)
 	}).Catch(func(exc *Exception) {
 		s.sendException(w, r, exc)

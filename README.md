@@ -42,13 +42,12 @@ Set `MOLOT_DUMP=1` to print the task JSON sent to Gorn.
 S3_BUCKET=molot S3_ENDPOINT=http://minio:9000 \
   AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
   molot store --listen 127.0.0.1:8064 \
-    --index-bucket molot --index-key complete --index-ttl "$INDEX_REFRESH_INTERVAL" \
-    --kv-endpoint "$KV_ENDPOINT" --kv-bucket "$KV_BUCKET" --kv-timeout "$KV_TIMEOUT"
+    --index-bucket molot --index-key complete --index-ttl "$INDEX_REFRESH_INTERVAL"
 ```
 
-The listen address, index bucket/key/refresh interval, KV endpoint/bucket/timeout
-must be supplied explicitly. `MOLOT_STORE_INDEX_BUCKET`, `MOLOT_STORE_INDEX_KEY`
-and `MOLOT_STORE_KV_*` can supply the corresponding flags. They have no defaults.
+The listen address and the index bucket/key/refresh interval must be supplied
+explicitly. `MOLOT_STORE_INDEX_BUCKET` and `MOLOT_STORE_INDEX_KEY` can supply
+the corresponding flags. They have no defaults.
 
 Store serves the same read API as cache:
 
@@ -64,15 +63,11 @@ index clears the entire positive cache. Negative results are not cached.
 Both resolve versions enqueue the complete requested UID list for the same
 MinIO `queue/` statistics writer used by cache, including missing UIDs.
 
-GET always checks KV first. A KV miss or error falls through to MinIO,
-independently of the index. Artifacts up to and including 64 MiB populate KV;
-a failed KV write does not fail the download. Larger artifacts stream from
-MinIO without populating KV.
+GET streams the archive from S3, independently of the index.
 
-`PUT /v1/blob/<uid>` reads the request body into memory and writes it to MinIO
-using a seekable reader so S3 retries can replay it. PUT never reads or writes
-KV. Success is `204`, after MinIO confirms the write. The 64 MiB cache limit
-does not limit uploads.
+`PUT /v1/blob/<uid>` reads the request body into memory and writes it to S3
+using a seekable reader so S3 retries can replay it. Success is `204`, after
+S3 confirms the write.
 
 The graph executor uses authoritative resolve at startup, then trusts its
 answer and successful worker completion. It performs no per-node S3 HEADs.
@@ -89,31 +84,16 @@ Serve the external package cache:
 ```sh
 S3_BUCKET=molot S3_ENDPOINT=http://minio:9000 \
   AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
-  molot cache --listen 0.0.0.0:8054 \
-    --kv-endpoint "$KV_ENDPOINT" --kv-bucket "$KV_BUCKET" --kv-timeout "$KV_TIMEOUT"
+  molot cache --listen 0.0.0.0:8054
 ```
 
 `POST /v1/resolve` accepts a JSON list of node uids and returns the
 sub-list present in `s3://cix/complete`. Both resolve versions use only that
 index, fetched as one object and cached in memory for 30 seconds.
 
-`GET /v1/blob/<uid>` first reads the UID from KV and returns cached bytes on a
-hit, even if the UID is absent from the index. A KV read error returns `500`
-without an S3 request. Only a KV `404` falls through to the index: an unlisted
-UID returns `404`, while an indexed UID is fetched from
+`GET /v1/blob/<uid>` serves only UIDs in the index: an unlisted UID returns
+`404`, while an indexed UID is streamed from
 `s3://$S3_BUCKET/molot/<uid>/result.zstd`.
-
-Artifacts up to and including 64 MiB are written to KV before being returned.
-Larger artifacts stream from S3 without being cached. A KV write failure is
-logged and the already downloaded artifact is returned. Each KV request uses
-the explicitly configured timeout.
-
-KV uses the UID as the key and the raw archive as the value. Configure the
-bucket in `kv back` with capacity greater than 64 MiB (KV also counts key
-bytes). KV is mandatory. Its endpoint, bucket, and positive request timeout
-must be set explicitly via the three flags above or the corresponding
-`MOLOT_CACHE_KV_*` environment variables. None has a default; missing or
-empty settings prevent startup.
 
 Every resolve request's uid list is also queued to a single writer
 goroutine which flushes whatever has accumulated as a jsonline chunk to
@@ -138,12 +118,6 @@ Lab's complete job uses these statistics for retention and rebuilds the index.
 | `MOLOT_QUIET` | no | if set, don't stream per-node `gorn ignite` stdout/stderr; only dump them if a node fails |
 | `MOLOT_RESOLVE` | yes (executor) | Authoritative `molot store` endpoints. Falls back to `IX_PACKAGE_CACHE` when unset. Same list via `--resolve`. |
 | `MOLOT_STORE_ENDPOINT` | yes (executor/worker) | Explicit HTTP(S) store URL as seen from workers; no default. Same setting via `--store-endpoint` on the coordinator. |
-| `MOLOT_STORE_KV_ENDPOINT` | yes (store, unless set via CLI) | KV front URL; no default. |
-| `MOLOT_STORE_KV_BUCKET` | yes (store, unless set via CLI) | KV bucket for artifact bytes; no default. |
-| `MOLOT_STORE_KV_TIMEOUT` | yes (store, unless set via CLI) | Positive KV request timeout; no default. |
-| `MOLOT_CACHE_KV_ENDPOINT` | yes (cache, unless set via CLI) | KV front URL. Same setting via `--kv-endpoint`; no default. |
-| `MOLOT_CACHE_KV_BUCKET` | yes (cache, unless set via CLI) | KV bucket for artifact bytes. Same setting via `--kv-bucket`; no default. |
-| `MOLOT_CACHE_KV_TIMEOUT` | yes (cache, unless set via CLI) | Positive timeout for a complete KV request, as a Go duration. Same setting via `--kv-timeout`; no default. |
 | `IX_KEEP_GOING` | no | exact value `yes` continues independent graph branches after failures; anything else is fail-fast |
 
 ## Graph format
