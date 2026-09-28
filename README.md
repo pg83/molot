@@ -46,7 +46,9 @@ S3_BUCKET=molot S3_ENDPOINT=http://minio:9000 \
 ```
 
 The listen address and the index bucket/key/refresh interval must be supplied
-explicitly. `MOLOT_STORE_INDEX_BUCKET` and `MOLOT_STORE_INDEX_KEY` can supply
+explicitly. `--listen` repeats: one process serves every given address (e.g.
+loopback for workers and the mesh address for clients in another network
+namespace); the same holds for `molot cache`. `MOLOT_STORE_INDEX_BUCKET` and `MOLOT_STORE_INDEX_KEY` can supply
 the corresponding flags. They have no defaults.
 
 Store serves the same read API as cache:

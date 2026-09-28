@@ -69,14 +69,15 @@ func artifactServerMain(command string, args []string) {
 		indexInterval = 30 * time.Second
 	}
 
-	listen := fs.String("listen", "", "HTTP listen address, e.g. 0.0.0.0:8054")
+	var listens listenAddrs
+	fs.Var(&listens, "listen", "HTTP listen address, repeatable, e.g. 0.0.0.0:8054")
 	indexBucket := fs.String("index-bucket", indexBucketValue, "S3 bucket containing the uid index")
 	indexKey := fs.String("index-key", indexKeyValue, "S3 object containing one uid per line")
 	indexTTL := fs.Duration("index-ttl", indexInterval, "positive background uid index refresh interval (required for store)")
 
 	Throw(fs.Parse(args))
 
-	if *listen == "" {
+	if len(listens) == 0 {
 		ThrowFmt("%s: --listen is required", command)
 	}
 
@@ -117,10 +118,14 @@ func artifactServerMain(command string, args []string) {
 		mux = (&storeSrv{cacheSrv: srv, storage: cfg.S3Cli}).routes()
 	}
 
-	server := &http.Server{
-		Addr:              *listen,
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
+	servers := make([]*http.Server, 0, len(listens))
+
+	for _, addr := range listens {
+		servers = append(servers, &http.Server{
+			Addr:              addr,
+			Handler:           mux,
+			ReadHeaderTimeout: 10 * time.Second,
+		})
 	}
 
 	go func() {
@@ -134,20 +139,53 @@ func artifactServerMain(command string, args []string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		Try(func() {
-			Throw(server.Shutdown(ctx))
-		}).Catch(func(exc *Exception) {
-			fmt.Fprintf(os.Stderr, "molot %s: shutdown: %v\n", command, exc)
-		})
+		for _, server := range servers {
+			Try(func() {
+				Throw(server.Shutdown(ctx))
+			}).Catch(func(exc *Exception) {
+				fmt.Fprintf(os.Stderr, "molot %s: shutdown: %v\n", command, exc)
+			})
+		}
 	}()
 
 	fmt.Fprintf(os.Stderr, "molot %s: listening on %s index=s3://%s/%s blobs=s3://%s/%s/<uid>/result.zstd\n",
-		command, *listen, *indexBucket, *indexKey, cfg.S3Bucket, cfg.S3Root)
+		command, listens.String(), *indexBucket, *indexKey, cfg.S3Bucket, cfg.S3Root)
 
-	err := server.ListenAndServe()
+	serveAll(servers)
+}
 
-	if err != nil && err != http.ErrServerClosed {
-		Throw(err)
+// listenAddrs is a repeatable --listen: one process serves the same handler
+// on each address, e.g. loopback for local clients and the mesh address for
+// callers in another network namespace.
+type listenAddrs []string
+
+func (l *listenAddrs) String() string {
+	return strings.Join(*l, ",")
+}
+
+func (l *listenAddrs) Set(addr string) error {
+	*l = append(*l, addr)
+
+	return nil
+}
+
+// serveAll runs every server until all have shut down; any failure other
+// than a shutdown (a busy address, say) throws and takes the process down.
+func serveAll(servers []*http.Server) {
+	errs := make(chan error, len(servers))
+
+	for _, server := range servers {
+		go func() {
+			errs <- server.ListenAndServe()
+		}()
+	}
+
+	for range servers {
+		err := <-errs
+
+		if err != nil && err != http.ErrServerClosed {
+			Throw(err)
+		}
 	}
 }
 
